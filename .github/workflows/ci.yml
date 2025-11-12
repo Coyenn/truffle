@@ -45,6 +45,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Install GNU grep (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install grep
+          echo "$(brew --prefix)/opt/grep/libexec/gnubin" >> $GITHUB_PATH
+        shell: bash
+
       - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
 
