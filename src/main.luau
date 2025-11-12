@@ -96,7 +96,6 @@ end
 local function main()
 	local args = Process.args
 
-	-- Handle no arguments or help flag
 	if #args == 0 or #args == 1 or args[2] == "--help" or args[2] == "-h" then
 		printTopLevelHelp()
 		Process.exit(0)
@@ -104,13 +103,11 @@ local function main()
 
 	local commandName = args[2]
 
-	-- Handle command-specific help
 	if commandName == "--help" or commandName == "-h" then
 		printTopLevelHelp()
 		Process.exit(0)
 	end
 
-	-- Check if command exists
 	local command = COMMANDS[commandName]
 	if not command then
 		print(string.format("Unknown command: %s", commandName))
@@ -119,13 +116,11 @@ local function main()
 		Process.exit(1)
 	end
 
-	-- Handle command help
 	if #args >= 3 and (args[3] == "--help" or args[3] == "-h") then
 		command.usage()
 		Process.exit(0)
 	end
 
-	-- Route to command
 	local commandArgs = {}
 	for i = 3, #args do
 		table.insert(commandArgs, args[i])
@@ -134,7 +129,6 @@ local function main()
 	local success = false
 
 	if commandName == "convert" then
-		-- Check magick availability
 		local magickOk, magickError = checkMagick()
 		if not magickOk then
 			print(string.format("[%s] ERROR: %s", commandName, magickError))
@@ -149,7 +143,6 @@ local function main()
 		end
 		success = command.run(inputPath :: string, outputPath :: string, scale)
 	elseif commandName == "highlights" then
-		-- Check magick availability
 		local magickOk, magickError = checkMagick()
 		if not magickOk then
 			print(string.format("[%s] ERROR: %s", commandName, magickError))

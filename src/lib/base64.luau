@@ -22,14 +22,12 @@ local function encode(input: buffer): buffer
 	local outputLength = inputChunks * 4
 	local output = buffer.create(outputLength)
 
-	-- Since we use readu32 and chunks are 3 bytes large, we can't read the last chunk here
 	for chunkIndex = 1, inputChunks - 1 do
 		local inputIndex = (chunkIndex - 1) * 3
 		local outputIndex = (chunkIndex - 1) * 4
 
 		local chunk = bit32.byteswap(buffer.readu32(input, inputIndex))
 
-		-- 8 + 24 - (6 * index)
 		local value1 = bit32.rshift(chunk, 26)
 		local value2 = bit32.band(bit32.rshift(chunk, 20), 0b111111)
 		local value3 = bit32.band(bit32.rshift(chunk, 14), 0b111111)
@@ -90,7 +88,6 @@ local function decode(input: buffer): buffer
 	local inputLength = buffer.len(input)
 	local inputChunks = math.ceil(inputLength / 4)
 
-	-- TODO: Support input without padding
 	local inputPadding = 0
 	if inputLength ~= 0 then
 		if buffer.readu8(input, inputLength - 1) == padding then

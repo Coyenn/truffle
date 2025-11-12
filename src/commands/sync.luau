@@ -20,7 +20,6 @@ end
 local function checkAsphalt(): (boolean, string?)
 	local asphaltCheck = Process.run("asphalt", { "--version" })
 	if not asphaltCheck.ok then
-		-- Try with just "asphalt" command
 		local asphaltCheck2 = Process.run("asphalt", {})
 		if not asphaltCheck2.ok then
 			return false, "asphalt command is not available. Please install asphalt."
@@ -55,13 +54,10 @@ local function getPngDimensions(pngPath: string): (number?, number?)
 		data = string.char(table.unpack(data))
 	end
 
-	-- PNG files start with an 8-byte signature.
 	if data:sub(1, 8) ~= "\137PNG\13\10\26\10" then
 		return nil, nil
 	end
 
-	-- IHDR chunk starts right after the 8-byte signature + 4-byte length +
-	-- 4-byte chunk type, so width is stored at byte 17-20 (1-indexed).
 	local function readUInt32BE(str: string, offset: number): number
 		local b1, b2, b3, b4 = string.byte(str, offset, offset + 3)
 		return ((b1 * 256 + b2) * 256 + b3) * 256 + b4
@@ -126,8 +122,6 @@ local function serialiseLuau(tbl: {}, indent: string): string
 			linePrefix ..= tostring(value) .. ","
 			table.insert(pieces, linePrefix)
 		elseif value == nil then
-			-- Skip nil values (for optional fields like highlightId)
-			-- Don't add anything
 		else
 			error("Unsupported value type in assets table: " .. typeof(value))
 		end
@@ -173,9 +167,7 @@ local function serialiseDts(tbl: {}, indent: string): string
 				)
 			end
 		elseif value == nil then
-			-- Skip nil values
 		else
-			-- Fallback: non-table values treated as leaf assets
 			table.insert(pieces, string.format("%s%s: AssetMeta;", innerIndent, quoteKey(key)))
 		end
 	end
@@ -197,14 +189,12 @@ local function syncAsphalt(): boolean
 end
 
 local function run(): boolean
-	-- Check asphalt availability
 	local asphaltOk, asphaltError = checkAsphalt()
 	if not asphaltOk then
 		print(string.format("[%s] ERROR: %s", COMMAND_NAME, asphaltError))
 		return false
 	end
 
-	-- Get API key (warn but don't fail if missing - original behavior)
 	local asphaltApiKey, keyError = getAsphaltApiKey()
 	if not asphaltApiKey then
 		print(string.format("[%s] WARN: %s", COMMAND_NAME, keyError))
@@ -232,17 +222,14 @@ local function run(): boolean
 	end
 
 	local function getHighlightAssetId(node: any, pathSegments: { string }): string?
-		-- Check if this is a base image (not already a highlight variant)
 		local lastSegment = pathSegments[#pathSegments]
 		if not lastSegment or lastSegment:match("%-highlight%.png$") then
 			return nil
 		end
 
-		-- Build path to highlight variant
 		local highlightPath = { table.unpack(pathSegments) }
 		highlightPath[#highlightPath] = lastSegment:gsub("%.png$", "-highlight.png")
 
-		-- Navigate to highlight variant in the assets tree
 		local highlightNode = newAssets
 		for _, segment in ipairs(highlightPath) do
 			if typeof(highlightNode) == "table" then
@@ -252,7 +239,6 @@ local function run(): boolean
 			end
 		end
 
-		-- Extract asset ID from highlight variant
 		if typeof(highlightNode) == "string" or typeof(highlightNode) == "number" then
 			return tostring(highlightNode)
 		elseif isAssetMetaTable(highlightNode) then
@@ -282,7 +268,6 @@ local function run(): boolean
 				height = h or 0,
 			}
 
-			-- Check for highlight variant
 			local highlightId = getHighlightAssetId(node, pathSegments)
 			if highlightId then
 				result.highlightId = highlightId
@@ -309,7 +294,6 @@ local function run(): boolean
 				height = h or node.height or 0,
 			}
 
-			-- Check for highlight variant
 			local highlightId = getHighlightAssetId(node, pathSegments)
 			if highlightId then
 				result.highlightId = highlightId

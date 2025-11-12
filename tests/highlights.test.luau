@@ -33,7 +33,6 @@ Testing.describe("highlights command", function()
 	end)
 
 	Testing.test("checkMagick detects when magick is not available", function()
-		-- Test error handling for missing magick command
 		local function testCheck()
 			local pcallOk, result = pcall(Process.run, "nonexistent_magick_xyz", { "-version" })
 			if not pcallOk then
@@ -47,7 +46,6 @@ Testing.describe("highlights command", function()
 	end)
 
 	Testing.test("processImage skips existing highlights without force flag", function()
-		-- Create a test PNG file
 		local testPng = "test_image.png"
 		local testHighlight = "test_image-highlight.png"
 		FS.writeFile(testPng, "fake png data")
@@ -64,17 +62,13 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		-- Verify files exist
-		local pngOk = pcall(FS.isFile, testPng)
-		local highlightOk = pcall(FS.isFile, testHighlight)
-		if pngOk then
-			local ok = pcall(FS.isFile, testPng)
-			if ok then
-				Testing.expect(FS.isFile(testPng)).toBe(true)
-			end
+		local pngOk, pngStat = pcall(FS.stat, testPng)
+		local highlightOk, highlightStat = pcall(FS.stat, testHighlight)
+		if pngOk and pngStat then
+			Testing.expect(pngStat.kind).toBe("file")
 		end
-		if highlightOk then
-			Testing.expect(FS.isFile(testHighlight)).toBe(true)
+		if highlightOk and highlightStat then
+			Testing.expect(highlightStat.kind).toBe("file")
 		end
 	end)
 
@@ -89,14 +83,13 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok = pcall(FS.isFile, testPng)
-		if ok then
-			Testing.expect(FS.isFile(testPng)).toBe(true)
+		local ok, stat = pcall(FS.stat, testPng)
+		if ok and stat then
+			Testing.expect(stat.kind).toBe("file")
 		end
 	end)
 
 	Testing.test("processImage handles dry-run mode", function()
-		-- Test that dry-run doesn't create files
 		local testPng = "test_dryrun.png"
 		FS.writeFile(testPng, "fake png data")
 
@@ -105,7 +98,7 @@ Testing.describe("highlights command", function()
 			if statOk1 and statResult1 and statResult1.kind == "file" then
 				pcall(FS.deleteFile, testPng)
 			end
-			-- In dry-run, highlight file should not exist, but clean up if it does
+
 			local highlightPath = "test_dryrun-highlight.png"
 			local statOk2, statResult2 = pcall(FS.stat, highlightPath)
 			if statOk2 and statResult2 and statResult2.kind == "file" then
@@ -113,9 +106,9 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok = pcall(FS.isFile, testPng)
-		if ok then
-			Testing.expect(FS.isFile(testPng)).toBe(true)
+		local ok, stat = pcall(FS.stat, testPng)
+		if ok and stat then
+			Testing.expect(stat.kind).toBe("file")
 		end
 	end)
 
@@ -135,17 +128,14 @@ Testing.describe("highlights command", function()
 		if statOk and statResult then
 			Testing.expect(statResult.kind).toBe("file")
 		else
-			-- Suppress unused variable warning
 			_ = statResult
 		end
 	end)
 
 	Testing.test("processPath handles directory with PNG files", function()
-		-- Use simple paths without nested directories to avoid directory creation issues
 		local testPng1 = "test_highlights_image1.png"
 		local testPng2 = "test_highlights_image2.png"
 
-		-- Create files
 		FS.writeFile(testPng1, "fake png data")
 		FS.writeFile(testPng2, "fake png data")
 
@@ -160,13 +150,13 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok1, exists1 = pcall(FS.isFile, testPng1)
-		local ok2, exists2 = pcall(FS.isFile, testPng2)
-		if ok1 then
-			Testing.expect(exists1).toBe(true)
+		local ok1, stat1 = pcall(FS.stat, testPng1)
+		local ok2, stat2 = pcall(FS.stat, testPng2)
+		if ok1 and stat1 then
+			Testing.expect(stat1.kind).toBe("file")
 		end
-		if ok2 then
-			Testing.expect(exists2).toBe(true)
+		if ok2 and stat2 then
+			Testing.expect(stat2.kind).toBe("file")
 		end
 	end)
 
@@ -188,7 +178,6 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		-- Verify highlight variant pattern matching
 		local isHighlight = testHighlight:match("%-highlight%.png$")
 		Testing.expect(isHighlight).toBe("-highlight.png")
 	end)
@@ -196,13 +185,10 @@ Testing.describe("highlights command", function()
 	Testing.test("processPath handles non-existent path", function()
 		local nonexistentPath = "nonexistent_path_xyz_123"
 		local statOk, _statResult = pcall(FS.stat, nonexistentPath)
-		-- FS.stat might not throw an error, but return a result indicating failure
-		-- Check if stat failed or if the path doesn't exist
+
 		if not statOk then
 			Testing.expect(statOk).toBe(false)
 		else
-			-- If stat succeeded, the path might exist (unlikely but possible)
-			-- Just verify the function was called
 			Testing.expect(_statResult).toBeDefined()
 		end
 	end)
@@ -223,7 +209,6 @@ Testing.describe("highlights command", function()
 	end)
 
 	Testing.test("run validates thickness parameter", function()
-		-- Test that thickness must be >= 1
 		local validThickness = 1
 		local invalidThickness = 0
 
@@ -243,7 +228,6 @@ Testing.describe("highlights command", function()
 	end)
 
 	Testing.test("run fails when magick is not available", function()
-		-- Test error handling
 		Testing.expect(HighlightsCommand.run).toBeDefined()
 		Testing.expect(typeof(HighlightsCommand.run)).toBe("function")
 	end)
@@ -259,9 +243,9 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok = pcall(FS.isFile, testPng)
-		if ok then
-			Testing.expect(FS.isFile(testPng)).toBe(true)
+		local ok, stat = pcall(FS.stat, testPng)
+		if ok and stat then
+			Testing.expect(stat.kind).toBe("file")
 		end
 	end)
 
@@ -276,15 +260,13 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok = pcall(FS.isFile, testPng)
-		if ok then
-			Testing.expect(FS.isFile(testPng)).toBe(true)
+		local ok, stat = pcall(FS.stat, testPng)
+		if ok and stat then
+			Testing.expect(stat.kind).toBe("file")
 		end
 	end)
 
 	Testing.test("findPngFiles recursively finds PNG files", function()
-		-- Test recursive directory traversal logic
-		-- Use simple paths without nested directories
 		local png1 = "test_recursive_image1.png"
 		local png2 = "test_recursive_image2.png"
 
@@ -302,13 +284,13 @@ Testing.describe("highlights command", function()
 			end
 		end)
 
-		local ok1, exists1 = pcall(FS.isFile, png1)
-		local ok2, exists2 = pcall(FS.isFile, png2)
-		if ok1 then
-			Testing.expect(exists1).toBe(true)
+		local ok1, stat1 = pcall(FS.stat, png1)
+		local ok2, stat2 = pcall(FS.stat, png2)
+		if ok1 and stat1 then
+			Testing.expect(stat1.kind).toBe("file")
 		end
-		if ok2 then
-			Testing.expect(exists2).toBe(true)
+		if ok2 and stat2 then
+			Testing.expect(stat2.kind).toBe("file")
 		end
 	end)
 

@@ -1,5 +1,4 @@
 local FS = zune.fs
-local Net = zune.net
 local Process = zune.process
 local Serde = zune.serde
 local Base64 = require("../lib/base64")
@@ -20,20 +19,33 @@ local function printUsage()
 	print("  convert input.png output.png 50")
 end
 
-local function checkExternalTools(): (boolean, string?)
-	-- Check magick
+local function findPixelizeCommand(): ({ executable: string, useModule: boolean }?, string?)
+	local directOk, directResult = pcall(Process.run, "pixeloe.pixelize", { "--help" })
+	if directOk and directResult and directResult.ok then
+		return { executable = "pixeloe.pixelize", useModule = false }, nil
+	end
+
+	local venvPath = ".venv/bin/pixeloe.pixelize"
+	local statOk, stat = pcall(FS.stat, venvPath)
+	if statOk and stat and stat.kind == "file" then
+		return { executable = venvPath, useModule = false }, nil
+	end
+
+	return nil, "pixeloe.pixelize is not available. Please install pixeloe."
+end
+
+local function checkExternalTools(): (boolean, string?, { executable: string, useModule: boolean }?)
 	local magickCheck = Process.run("magick", { "-version" })
 	if not magickCheck.ok then
-		return false, "magick (ImageMagick) is not available. Please install ImageMagick."
+		return false, "magick (ImageMagick) is not available. Please install ImageMagick.", nil
 	end
 
-	-- Check pixeloe.pixelize
-	local pixelizeCheck = Process.run("pixeloe.pixelize", { "--help" })
-	if not pixelizeCheck.ok then
-		return false, "pixeloe.pixelize is not available. Please install pixeloe."
+	local pixelizeCmd, pixelizeError = findPixelizeCommand()
+	if not pixelizeCmd then
+		return false, pixelizeError, nil
 	end
 
-	return true, nil
+	return true, nil, pixelizeCmd
 end
 
 local function getReplicateApiToken(): (string?, string?)
@@ -49,55 +61,140 @@ local function getReplicateApiToken(): (string?, string?)
 		return nil, "REPLICATE_API_TOKEN environment variable is not set."
 	end
 
-	-- Trim whitespace
 	replicateApiToken = replicateApiToken:match("^%s*(.*)"):match("(.-)%s*$")
 	return replicateApiToken, nil
 end
 
+local function requestWithUrl(url: string, options: { [string]: any }?): (boolean, any?, string?)
+	local curlCheck = Process.run("curl", { "--version" })
+	if not curlCheck.ok then
+		return false, nil, "curl is not available. Please install curl."
+	end
+
+	local method = "GET"
+	local headers = {}
+	local body = nil
+
+	if options then
+		if options.method then
+			method = options.method
+		end
+
+		if options.headers then
+			for headerKey, headerValue in pairs(options.headers) do
+				headers[headerKey] = headerValue
+			end
+		end
+
+		if options.body then
+			body = typeof(options.body) == "buffer" and buffer.tostring(options.body) or tostring(options.body)
+		end
+	end
+
+	local curlArgs = {
+		"-s",
+		"-S",
+		"-w",
+		"%{http_code}",
+		"-X",
+		method,
+	}
+
+	for headerKey, headerValue in pairs(headers) do
+		table.insert(curlArgs, "-H")
+		table.insert(curlArgs, string.format("%s: %s", headerKey, headerValue))
+	end
+
+	local tempBodyFile = nil
+	if body and (method == "POST" or method == "PUT" or method == "PATCH") then
+		tempBodyFile = "/tmp/truffle_curl_body_" .. tostring(math.random(1000000, 9999999))
+		FS.writeFile(tempBodyFile, body)
+		table.insert(curlArgs, "--data-binary")
+		table.insert(curlArgs, "@" .. tempBodyFile)
+	end
+
+	local tempResponseFile = "/tmp/truffle_curl_response_" .. tostring(math.random(1000000, 9999999))
+	table.insert(curlArgs, "-o")
+	table.insert(curlArgs, tempResponseFile)
+
+	table.insert(curlArgs, url)
+
+	local curlResult = Process.run("curl", curlArgs)
+
+	if tempBodyFile then
+		pcall(FS.deleteFile, tempBodyFile)
+	end
+
+	if not curlResult.ok then
+		pcall(FS.deleteFile, tempResponseFile)
+		local errorMsg = curlResult.stderr or "Unknown curl error"
+		return false, nil, errorMsg
+	end
+
+	local statusCode = 0
+	local statusStr = curlResult.stdout:match("%d+")
+	if statusStr then
+		statusCode = tonumber(statusStr) or 0
+	else
+		statusCode = 200
+	end
+
+	local responseBody = ""
+	local readOk, bodyData = pcall(FS.readFile, tempResponseFile)
+	if readOk and bodyData then
+		responseBody = bodyData
+	end
+
+	pcall(FS.deleteFile, tempResponseFile)
+
+	local ok = statusCode >= 200 and statusCode < 300
+
+	local response = {
+		ok = ok,
+		status_code = statusCode,
+		status_reason = "",
+		body = responseBody,
+	}
+
+	return true, response, nil
+end
+
 local function run(inputPath: string, outputPath: string, scale: number?): boolean
-	-- Validate scale
 	local scaleValue = scale or 40
 	if not scaleValue or scaleValue < 10 or scaleValue > 100 then
 		print(string.format("[%s] ERROR: Scale must be between 10 and 100.", COMMAND_NAME))
 		return false
 	end
 
-	-- Check external tools
-	local toolsOk, toolsError = checkExternalTools()
+	local toolsOk, toolsError, pixelizeCmd = checkExternalTools()
 	if not toolsOk then
 		print(string.format("[%s] ERROR: %s", COMMAND_NAME, toolsError))
 		return false
 	end
 
-	-- Get API token
 	local replicateApiToken, tokenError = getReplicateApiToken()
 	if not replicateApiToken then
 		print(string.format("[%s] ERROR: %s", COMMAND_NAME, tokenError))
 		return false
 	end
 
-	-- Validate input file exists
-	if not FS.isFile(inputPath) then
+	if FS.stat(inputPath).kind ~= "file" then
 		print(string.format("[%s] ERROR: Input file '%s' does not exist.", COMMAND_NAME, inputPath))
 		return false
 	end
 
-	-- Calculate target_size based on scale with downscaling factor of 12.5 (for patch_size 8)
-	-- Formula: target_size = scale * base_factor where base_factor = 256/40 = 6.4
-	-- This ensures scale=40% gives target_size=256 (the original default)
 	local patchSize = 8
-	local baseScale = 40 -- Default scale value
-	local baseTargetSize = 256 -- Default target_size for baseScale
+	local baseScale = 40
+	local baseTargetSize = 256
 	local targetSize = math.floor(scaleValue * baseTargetSize / baseScale)
 	local scalePercentage = tostring(100 / patchSize) .. "%"
 
-	-- Pixelize the image before background removal
 	local pixelizedPath = inputPath .. ".pixelized.png"
 	print(
 		string.format("[%s] Pixelizing image (target_size: %d, patch_size: %d)...", COMMAND_NAME, targetSize, patchSize)
 	)
 
-	local pixelizeResult = Process.run("pixeloe.pixelize", {
+	local pixelizeArgs = {
 		inputPath,
 		"--output_img",
 		pixelizedPath,
@@ -105,51 +202,73 @@ local function run(inputPath: string, outputPath: string, scale: number?): boole
 		tostring(targetSize),
 		"--patch_size",
 		tostring(patchSize),
-	})
+	}
+
+	local pixelizeOk, pixelizeResult = pcall(Process.run, pixelizeCmd.executable, pixelizeArgs)
+	if not pixelizeOk then
+		print(
+			string.format(
+				"[%s] ERROR: Failed to execute pixeloe.pixelize at '%s': %s",
+				COMMAND_NAME,
+				pixelizeCmd.executable,
+				tostring(pixelizeResult)
+			)
+		)
+		return false
+	end
 
 	if not pixelizeResult.ok then
 		print(string.format("[%s] ERROR: pixeloe.pixelize command failed.", COMMAND_NAME))
-		if pixelizeResult.stderr ~= "" then
+		if pixelizeResult.stderr and pixelizeResult.stderr ~= "" then
 			print(pixelizeResult.stderr)
 		end
 		return false
 	end
 
-	if not FS.isFile(pixelizedPath) then
+	local pixelizedStatOk, pixelizedStat = pcall(FS.stat, pixelizedPath)
+	if not pixelizedStatOk or not pixelizedStat or pixelizedStat.kind ~= "file" then
 		print(string.format("[%s] ERROR: Pixelized image was not created.", COMMAND_NAME))
 		return false
 	end
 
-	-- Use pixelized image for background removal
 	local pixelizedImageData = FS.readFile(pixelizedPath)
 	local base64Image = Base64.encode(buffer.fromstring(pixelizedImageData))
 
-	local requestBody = Serde.encode("json", {
+	local requestBodyJson = Serde.json.encode({
 		version = "a029dff38972b5fda4ec5d75d7d1cd25aeff621d2cf4946a41055d7db66b80bc",
 		input = {
 			image = "data:image/png;base64," .. buffer.tostring(base64Image),
 		},
 	})
 
+	local headers = {
+		["Authorization"] = replicateApiToken:match("^Bearer ") and replicateApiToken
+			or ("Bearer " .. replicateApiToken),
+		["Content-Type"] = "application/json",
+		["Prefer"] = "wait",
+	}
+
 	print(string.format("[%s] Requesting background removal from Replicate...", COMMAND_NAME))
 
-	local response = Net.request({
+	local requestOk, response, requestError = requestWithUrl("https://api.replicate.com/v1/predictions", {
 		method = "POST",
-		url = "https://api.replicate.com/v1/predictions",
-		headers = {
-			["Authorization"] = "Bearer " .. replicateApiToken,
-			["Content-Type"] = "application/json",
-			["Prefer"] = "wait",
-		},
-		body = requestBody,
+		headers = headers,
+		body = requestBodyJson,
 	})
+
+	if not requestOk then
+		print(
+			string.format("[%s] ERROR: Failed to make HTTP request: %s", COMMAND_NAME, requestError or "Unknown error")
+		)
+		return false
+	end
 
 	if not response.ok then
 		print(
 			string.format(
 				"[%s] ERROR: Replicate API request failed with status %s",
 				COMMAND_NAME,
-				tostring(response.statusCode)
+				tostring(response.status_code)
 			)
 		)
 		if response.body then
@@ -159,7 +278,7 @@ local function run(inputPath: string, outputPath: string, scale: number?): boole
 	end
 
 	local decodeSuccess, replicatePayload = pcall(function()
-		return Serde.decode("json", response.body or "")
+		return Serde.json.decode(response.body or "")
 	end)
 	if not decodeSuccess then
 		print(string.format("[%s] ERROR: Failed to decode Replicate response JSON.", COMMAND_NAME))
@@ -167,15 +286,29 @@ local function run(inputPath: string, outputPath: string, scale: number?): boole
 	end
 
 	local responseData = replicatePayload.output
+	if typeof(responseData) == "table" then
+		responseData = responseData[1]
+	end
 
-	if not responseData then
+	if typeof(responseData) ~= "string" or responseData == "" then
 		print(string.format("[%s] ERROR: Replicate response does not contain any outputs.", COMMAND_NAME))
 		return false
 	end
 
 	print(string.format("[%s] Downloading background-removed image from Replicate...", COMMAND_NAME))
 
-	local downloadResponse = Net.request(responseData)
+	local downloadOk, downloadResponse, downloadError = requestWithUrl(responseData, nil)
+
+	if not downloadOk then
+		print(
+			string.format(
+				"[%s] ERROR: Failed to download background-removed image: %s",
+				COMMAND_NAME,
+				downloadError or "Unknown error"
+			)
+		)
+		return false
+	end
 
 	if not downloadResponse.ok or not downloadResponse.body then
 		print(string.format("[%s] ERROR: Failed to download background-removed image.", COMMAND_NAME))
@@ -187,7 +320,8 @@ local function run(inputPath: string, outputPath: string, scale: number?): boole
 
 	local finalInputPath = tempInputPath
 
-	if not FS.isFile(finalInputPath) then
+	local statOk, statResult = pcall(FS.stat, finalInputPath)
+	if not statOk or not statResult or statResult.kind ~= "file" then
 		print(string.format("[%s] ERROR: Input file '%s' does not exist.", COMMAND_NAME, finalInputPath))
 		return false
 	end
@@ -335,11 +469,12 @@ local function run(inputPath: string, outputPath: string, scale: number?): boole
 		outputPath,
 	})
 
-	-- Clean up temporary files
-	if FS.isFile(tempInputPath) then
+	local tempStatOk, tempStat = pcall(FS.stat, tempInputPath)
+	if tempStatOk and tempStat and tempStat.kind == "file" then
 		FS.deleteFile(tempInputPath)
 	end
-	if FS.isFile(pixelizedPath) then
+	local cleanupPixelizedStatOk, cleanupPixelizedStat = pcall(FS.stat, pixelizedPath)
+	if cleanupPixelizedStatOk and cleanupPixelizedStat and cleanupPixelizedStat.kind == "file" then
 		FS.deleteFile(pixelizedPath)
 	end
 

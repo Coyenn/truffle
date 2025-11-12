@@ -37,7 +37,6 @@ end
 local function processImage(imagePath: string, dryRun: boolean, force: boolean, thickness: number): boolean
 	local highlightPath = getHighlightPath(imagePath)
 
-	-- Check if highlight already exists
 	local highlightExists = false
 	local statOk, statResult = pcall(FS.stat, highlightPath)
 	if statOk and statResult.kind == "file" then
@@ -56,10 +55,6 @@ local function processImage(imagePath: string, dryRun: boolean, force: boolean, 
 
 	print(string.format("[%s] Processing: %s", COMMAND_NAME, imagePath))
 
-	-- ImageMagick command to create white outline:
-	-- 1. Extract alpha channel, add transparent padding, and compute inner edge mask
-	-- 2. Build a white outline sprite using the mask (same size as original)
-	-- 3. Composite the outline on top of the original image
 	local magickArgs = {
 		imagePath,
 		"-write",
@@ -137,7 +132,6 @@ local function processPath(path: string, dryRun: boolean, force: boolean, thickn
 	end
 
 	if pathStat.kind == "file" then
-		-- Single file
 		if not path:match("%.png$") then
 			print(string.format("[%s] ERROR: Input must be a PNG file: %s", COMMAND_NAME, path))
 			return 0
@@ -148,10 +142,8 @@ local function processPath(path: string, dryRun: boolean, force: boolean, thickn
 			skipped = skipped + 1
 		end
 	else
-		-- Try to read as directory
 		local ok, _ = pcall(FS.readDir, path)
 		if ok then
-			-- Directory - recursively find all PNG files
 			local function findPngFiles(dir: string, files: { string })
 				local dirEntries = FS.readDir(dir)
 				for _, entry in ipairs(dirEntries) do
@@ -160,14 +152,11 @@ local function processPath(path: string, dryRun: boolean, force: boolean, thickn
 					if entryStatOk then
 						local entryIsFile = entryStat.kind == "file"
 						if not entryIsFile then
-							-- Assume it's a directory if not a file
 							findPngFiles(fullPath, files)
 						elseif entry:match("%.png$") and not entry:match("%-highlight%.png$") then
-							-- Skip highlight variants themselves
 							table.insert(files, fullPath)
 						end
 					end
-					-- Skip if we can't stat
 				end
 			end
 
@@ -219,14 +208,12 @@ local function processPath(path: string, dryRun: boolean, force: boolean, thickn
 end
 
 local function run(inputPath: string, options: { dryRun: boolean?, force: boolean?, thickness: number? }): number
-	-- Validate thickness
 	local thickness = options.thickness or 1
 	if not thickness or thickness < 1 then
 		print(string.format("[%s] ERROR: Thickness must be >= 1", COMMAND_NAME))
 		return 0
 	end
 
-	-- Check magick availability
 	local magickOk, magickError = checkMagick()
 	if not magickOk then
 		print(string.format("[%s] ERROR: %s", COMMAND_NAME, magickError))

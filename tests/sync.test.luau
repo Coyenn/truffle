@@ -14,7 +14,6 @@ Testing.describe("sync command", function()
 	end)
 
 	Testing.test("getPngDimensions returns correct dimensions for valid PNG", function()
-		-- Create a minimal valid PNG file (1x1 pixel)
 		local pngData = string.char(
 			0x89,
 			0x50,
@@ -23,28 +22,28 @@ Testing.describe("sync command", function()
 			0x0D,
 			0x0A,
 			0x1A,
-			0x0A, -- PNG signature
+			0x0A,
 			0x00,
 			0x00,
 			0x00,
-			0x0D, -- IHDR chunk length
+			0x0D,
 			0x49,
 			0x48,
 			0x44,
-			0x52, -- IHDR
+			0x52,
 			0x00,
 			0x00,
 			0x00,
-			0x01, -- width = 1
+			0x01,
 			0x00,
 			0x00,
 			0x00,
-			0x02, -- height = 2
+			0x02,
 			0x08,
 			0x06,
 			0x00,
 			0x00,
-			0x00 -- rest of IHDR
+			0x00
 		)
 
 		local testPngPath = "test_sync_1x2.png"
@@ -57,9 +56,6 @@ Testing.describe("sync command", function()
 			end
 		end)
 
-		-- Access the private function through the module's internal scope
-		-- Since getPngDimensions is local, we'll test it indirectly through run()
-		-- But for direct testing, we need to expose it or test via file operations
 		local ok, data = pcall(FS.readFile, testPngPath)
 		Testing.expect(ok).toBe(true)
 		Testing.expect(data).toBeDefined()
@@ -78,7 +74,7 @@ Testing.describe("sync command", function()
 
 		local ok, data = pcall(FS.readFile, invalidPath)
 		Testing.expect(ok).toBe(true)
-		-- The data should not match PNG signature
+
 		Testing.expect(data).never.toBe("")
 	end)
 
@@ -91,9 +87,6 @@ Testing.describe("sync command", function()
 			},
 		}
 
-		-- Test that serialization produces valid Luau code
-		-- We can't directly test the private function, but we can verify
-		-- the structure is correct by checking if it can be loaded back
 		Testing.expect(testTable.key1).toBe("value1")
 		Testing.expect(testTable.key2).toBe(42)
 		Testing.expect(testTable.key3.nested).toBe("value")
@@ -114,9 +107,6 @@ Testing.describe("sync command", function()
 	end)
 
 	Testing.test("checkAsphalt detects when asphalt is not available", function()
-		-- This test checks the error handling
-		-- We can't easily mock Process.run, so we'll test the error path
-		-- by checking the function exists and handles errors
 		local function testCheck()
 			local ok, result = pcall(Process.run, "nonexistent_command_xyz", {})
 			if not ok then
@@ -130,17 +120,14 @@ Testing.describe("sync command", function()
 	end)
 
 	Testing.test("getAsphaltApiKey reads from environment variable", function()
-		-- Test that the function checks Process.env.ASPHALT_API_KEY
-		-- We can't easily set env vars in tests, so we'll verify the logic
 		local envKey = Process.env.ASPHALT_API_KEY
-		-- The function should handle both cases (set or not set)
+
 		if envKey then
 			Testing.expect(typeof(envKey)).toBe("string")
 		end
 	end)
 
 	Testing.test("getAsphaltApiKey reads from .env file", function()
-		-- Create a test .env file
 		local testEnvPath = ".env.test"
 		FS.writeFile(testEnvPath, "ASPHALT_API_KEY=test-key-123")
 
@@ -196,7 +183,6 @@ return {
 	end)
 
 	Testing.test("augmentNode processes string asset IDs", function()
-		-- Test the logic for augmenting nodes
 		local testNode = "asset-id-123"
 		Testing.expect(typeof(testNode)).toBe("string")
 		Testing.expect(testNode).toBe("asset-id-123")
@@ -214,7 +200,6 @@ return {
 	end)
 
 	Testing.test("getHighlightAssetId finds highlight variant", function()
-		-- Test the logic for finding highlight variants
 		local basePath = "character/base.png"
 		local highlightPath = basePath:gsub("%.png$", "-highlight.png")
 		Testing.expect(highlightPath).toBe("character/base-highlight.png")
@@ -227,15 +212,10 @@ return {
 	end)
 
 	Testing.test("run fails when asphalt is not available", function()
-		-- This test verifies error handling when asphalt command fails
-		-- We can't easily mock Process.run, so we test the error path
-		-- The function should handle missing asphalt gracefully
 		Testing.expect(SyncCommand.run).toBeDefined()
 	end)
 
 	Testing.test("run fails when API key is missing", function()
-		-- Test that run() handles missing API key
-		-- Since we can't easily mock environment, we verify the function exists
 		Testing.expect(SyncCommand.run).toBeDefined()
 		Testing.expect(typeof(SyncCommand.run)).toBe("function")
 	end)
