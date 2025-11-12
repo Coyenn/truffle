@@ -37,38 +37,15 @@ jobs:
         include:
           - os: ubuntu-latest
             os-name: linux
-          - os: macos-latest
-            os-name: macos
-          - os: windows-latest
-            os-name: windows
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Setup Rokit (Linux/Windows)
-        if: matrix.os != 'macos-latest'
+      - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
 
-      - name: Setup Rokit (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          # Install GNU grep first
-          brew install grep
-          export PATH="$(brew --prefix)/opt/grep/libexec/gnubin:$PATH"
-
-          # Get latest rokit version using GNU grep
-          VERSION=$(curl -s https://api.github.com/repos/rojo-rbx/rokit/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
-          VERSION="${VERSION#v}"
-
-          # Install rokit using the official install script
-          curl -sSf https://raw.githubusercontent.com/rojo-rbx/rokit/main/scripts/install.sh | bash -s "$VERSION"
-
-          # Add rokit to PATH
-          echo "$HOME/.rokit/bin" >> $GITHUB_PATH
-        shell: bash
-
-      - name: Add rokit to PATH (Linux/Windows)
-        if: matrix.os != 'macos-latest'
+      - name: Add rokit to PATH
         run: echo "$HOME/.rokit/bin" >> $GITHUB_PATH
         shell: bash
 
