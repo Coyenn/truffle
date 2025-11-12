@@ -18,6 +18,9 @@ jobs:
       - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
 
+      - name: Install dependencies
+        run: rokit install
+
       - name: Run tests
         run: ./project test
 
@@ -31,6 +34,9 @@ jobs:
 
       - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
+
+      - name: Install dependencies
+        run: rokit install
 
       - name: Build project
         run: chmod +x ./project && ./project build
