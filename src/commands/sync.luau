@@ -1,5 +1,6 @@
 local FS = zune.fs
 local Process = zune.process
+local Luau = zune.luau
 
 local COMMAND_NAME = "sync"
 local COMMAND_DESCRIPTION = "Sync assets and augment metadata with image dimensions"
@@ -73,11 +74,17 @@ end
 
 local function loadAssetsTable(modulePath: string): {}
 	local src = FS.readFile(modulePath)
-	local chunk, err = loadstring(src, "@" .. modulePath)
-	if not chunk then
-		error("Failed to load assets module: " .. err)
+	local compileOk, bytecode = pcall(Luau.compile, src)
+	if not compileOk then
+		error("Failed to compile assets module: " .. tostring(bytecode))
 	end
-	setfenv(chunk, {})
+	local loadOk, chunk = pcall(Luau.load, bytecode, {
+		env = {},
+		chunk_name = "@" .. modulePath,
+	})
+	if not loadOk then
+		error("Failed to load assets module: " .. tostring(chunk))
+	end
 	local ok, tbl = pcall(chunk)
 	if not ok then
 		error("Assets module threw an error: " .. tbl)

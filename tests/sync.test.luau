@@ -1,6 +1,7 @@
 local Testing = zune.testing
 local FS = zune.fs
 local Process = zune.process
+local Luau = zune.luau
 
 local SyncCommand = require("../src/commands/sync")
 
@@ -181,10 +182,15 @@ return {
 		local ok, src = pcall(FS.readFile, testModulePath)
 		Testing.expect(ok).toBe(true)
 		if ok then
-			local loadOk, chunk, err = pcall(loadstring, src, "@" .. testModulePath)
-			if loadOk then
-				Testing.expect(chunk).toBeDefined()
-				Testing.expect(err).toBe(nil)
+			local compileOk, bytecode = pcall(Luau.compile, src)
+			if compileOk then
+				local loadOk, chunk = pcall(Luau.load, bytecode, {
+					env = {},
+					chunk_name = "@" .. testModulePath,
+				})
+				if loadOk then
+					Testing.expect(chunk).toBeDefined()
+				end
 			end
 		end
 	end)
