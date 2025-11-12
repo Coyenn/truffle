@@ -18,6 +18,9 @@ jobs:
       - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
 
+      - name: Add rokit to PATH
+        run: echo "$HOME/.rokit/bin" >> $GITHUB_PATH
+
       - name: Install dependencies
         run: rokit install
 
@@ -34,6 +37,9 @@ jobs:
 
       - name: Setup Rokit
         uses: notthebestdev/setup-rokit@v1
+
+      - name: Add rokit to PATH
+        run: echo "$HOME/.rokit/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: rokit install
