@@ -33,7 +33,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
         include:
           - os: ubuntu-latest
             os-name: linux
@@ -66,19 +66,11 @@ jobs:
           ./project build
         shell: bash
 
-      - name: Create zip file (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Create zip file
         run: |
           ZIP_NAME="truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
           zip "$ZIP_NAME" truffle
         shell: bash
-
-      - name: Create zip file (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          $ZIP_NAME = "truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
-          Compress-Archive -Path truffle -DestinationPath $ZIP_NAME
-        shell: pwsh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v5
@@ -114,8 +106,6 @@ jobs:
         with:
           files: |
             artifacts/truffle-linux-x86_64/truffle-${{ steps.version.outputs.version }}-linux-x86_64.zip
-            artifacts/truffle-macos-x86_64/truffle-${{ steps.version.outputs.version }}-macos-x86_64.zip
-            artifacts/truffle-windows-x86_64/truffle-${{ steps.version.outputs.version }}-windows-x86_64.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
