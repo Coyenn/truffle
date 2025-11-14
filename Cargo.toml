@@ -12,3 +12,4 @@ walkdir = "2.4"
 png = "0.17"
 regex = "1.10"
 full_moon = "2.0.0"
+image = { version = "0.25", default-features = false, features = ["png"] }

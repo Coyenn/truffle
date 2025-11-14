@@ -27,8 +27,6 @@
         buildInputs = with pkgs; [
           rustToolchain
           pkg-config
-          # ImageMagick for highlight command
-          imagemagick
         ];
       in {
         devShells.default = pkgs.mkShell {

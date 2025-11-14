@@ -1,5 +1,6 @@
 mod assets;
 mod commands;
+mod highlight;
 
 use clap::{Parser, Subcommand};
 

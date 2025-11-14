@@ -1,7 +1,6 @@
+use crate::highlight;
 use clap::Parser;
-use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -22,132 +21,6 @@ pub struct HighlightArgs {
     /// Outline thickness in pixels
     #[arg(long, default_value = "1")]
     pub thickness: u32,
-}
-
-/// Find the magick executable path.
-/// Checks in order:
-/// 1. TRUFFLE_MAGICK environment variable
-/// 2. Bundled binary relative to current executable
-/// 3. System "magick" command
-fn find_magick() -> Result<PathBuf, String> {
-    // Check environment variable first
-    if let Ok(custom_path) = env::var("TRUFFLE_MAGICK") {
-        let path = PathBuf::from(custom_path);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    // Try to find bundled binary
-    if let Ok(exe_path) = env::current_exe() {
-        let exe_dir = exe_path
-            .parent()
-            .ok_or("Could not determine executable directory")?;
-
-        // Detect platform
-        let platform_dir = if cfg!(target_os = "linux") {
-            if cfg!(target_arch = "x86_64") {
-                "linux-x86_64"
-            } else if cfg!(target_arch = "aarch64") {
-                "linux-aarch64"
-            } else {
-                return Err(format!(
-                    "Unsupported Linux architecture: {}",
-                    env::consts::ARCH
-                ));
-            }
-        } else if cfg!(target_os = "macos") {
-            if cfg!(target_arch = "x86_64") {
-                "macos-x86_64"
-            } else if cfg!(target_arch = "aarch64") {
-                "macos-arm64"
-            } else {
-                return Err(format!(
-                    "Unsupported macOS architecture: {}",
-                    env::consts::ARCH
-                ));
-            }
-        } else if cfg!(target_os = "windows") {
-            if cfg!(target_arch = "x86_64") {
-                "windows-x86_64"
-            } else if cfg!(target_arch = "aarch64") {
-                "windows-arm64"
-            } else {
-                return Err(format!(
-                    "Unsupported Windows architecture: {}",
-                    env::consts::ARCH
-                ));
-            }
-        } else {
-            return Err(format!("Unsupported OS: {}", env::consts::OS));
-        };
-
-        // Try relative to executable: ../vendor/imagemagick/<platform>/magick[.exe]
-        let bundled_path = exe_dir
-            .parent()
-            .map(|p| {
-                let mut path = p.to_path_buf();
-                path.push("vendor");
-                path.push("imagemagick");
-                path.push(platform_dir);
-                if cfg!(target_os = "windows") {
-                    path.push("magick.exe");
-                } else {
-                    path.push("magick");
-                }
-                path
-            })
-            .filter(|p| p.exists());
-
-        if let Some(path) = bundled_path {
-            return Ok(path);
-        }
-
-        // Also try same directory as executable (for packaged releases)
-        let bundled_path_same_dir = {
-            let mut path = exe_dir.to_path_buf();
-            path.push("vendor");
-            path.push("imagemagick");
-            path.push(platform_dir);
-            if cfg!(target_os = "windows") {
-                path.push("magick.exe");
-            } else {
-                path.push("magick");
-            }
-            path
-        };
-
-        if bundled_path_same_dir.exists() {
-            return Ok(bundled_path_same_dir);
-        }
-    }
-
-    // Fall back to system "magick" command
-    Ok(PathBuf::from("magick"))
-}
-
-fn check_magick() -> Result<(), String> {
-    let magick_path = find_magick()?;
-
-    let output = Command::new(&magick_path)
-        .arg("-version")
-        .output()
-        .map_err(|e| {
-            format!(
-                "magick (ImageMagick) is not available at {}: {}. Please install ImageMagick or ensure bundled binary is present.",
-                magick_path.display(),
-                e
-            )
-        })?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "magick (ImageMagick) at {} failed to execute. Please install ImageMagick or ensure bundled binary is present.",
-            magick_path.display()
-        ));
-    }
-
-    Ok(())
 }
 
 fn get_highlight_path(image_path: &Path) -> PathBuf {
@@ -187,78 +60,13 @@ fn process_image(
     }
 
     println!("[highlight] Processing: {}", image_path.display());
-
-    let thickness_str = thickness.to_string();
-    let diamond_str = format!("Diamond:{}", thickness);
-    let shave_str = thickness.to_string();
-
-    let magick_args = vec![
-        image_path.to_str().unwrap(),
-        "-write",
-        "mpr:original",
-        "+delete",
-        "(",
-        "mpr:original",
-        "-alpha",
-        "extract",
-        "-bordercolor",
-        "black",
-        "-border",
-        &thickness_str,
-        "-morphology",
-        "EdgeIn",
-        &diamond_str,
-        "-shave",
-        &shave_str,
-        "-write",
-        "mpr:outline-mask",
-        "+delete",
-        ")",
-        "(",
-        "mpr:original",
-        "-alpha",
-        "off",
-        "-fill",
-        "white",
-        "-colorize",
-        "100",
-        "-channel",
-        "A",
-        "mpr:outline-mask",
-        "-compose",
-        "CopyOpacity",
-        "-composite",
-        "+channel",
-        "-write",
-        "mpr:white-outline",
-        "+delete",
-        ")",
-        "mpr:original",
-        "mpr:white-outline",
-        "-compose",
-        "Over",
-        "-composite",
-        "-filter",
-        "Point",
-        highlight_path.to_str().unwrap(),
-    ];
-
-    let magick_path =
-        find_magick().map_err(|e| format!("Failed to locate magick executable: {}", e))?;
-
-    let output = Command::new(&magick_path)
-        .args(&magick_args)
-        .output()
-        .map_err(|e| format!("Failed to run magick at {}: {}", magick_path.display(), e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
+    highlight::generate_highlight(image_path, &highlight_path, thickness).map_err(|e| {
+        format!(
             "Failed to generate highlight for {}: {}",
             image_path.display(),
-            stderr
-        ));
-    }
+            e
+        )
+    })?;
 
     println!("[highlight] ✅ Generated: {}", highlight_path.display());
     Ok(true)
@@ -345,11 +153,6 @@ fn process_path(
 pub fn run(args: HighlightArgs) -> bool {
     if args.thickness < 1 {
         eprintln!("[highlight] ERROR: Thickness must be >= 1");
-        return false;
-    }
-
-    if let Err(e) = check_magick() {
-        eprintln!("[highlight] ERROR: {}", e);
         return false;
     }
 
