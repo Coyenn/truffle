@@ -2,14 +2,40 @@
 set -euo pipefail
 
 # Script to package Truffle CLI with bundled ImageMagick for release
-# Usage: ./scripts/package_release.sh [target-triple]
+# Usage: ./scripts/package_release.sh [target-triple] [--skip-build] [--version VERSION]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Default target is the current platform
-TARGET="${1:-$(rustc -vV | sed -n 's|host: ||p')}"
+# Parse arguments
+SKIP_BUILD=false
+VERSION=""
+TARGET=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --skip-build)
+      SKIP_BUILD=true
+      shift
+      ;;
+    --version)
+      VERSION="$2"
+      shift 2
+      ;;
+    *)
+      if [ -z "$TARGET" ]; then
+        TARGET="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Default target is the current platform if not provided
+if [ -z "$TARGET" ]; then
+  TARGET="$(rustc -vV | sed -n 's|host: ||p')"
+fi
 
 echo "Packaging Truffle CLI for target: $TARGET"
 
@@ -54,9 +80,13 @@ esac
 PLATFORM_DIR="${PLATFORM}-${ARCH_SUFFIX}"
 echo "Detected platform: $PLATFORM_DIR"
 
-# Build the Rust binary
-echo "Building Rust binary..."
-cargo build --release --target "$TARGET"
+# Build the Rust binary (unless skipped)
+if [ "$SKIP_BUILD" = false ]; then
+    echo "Building Rust binary..."
+    cargo build --release --target "$TARGET"
+else
+    echo "Skipping build (binary should already exist)"
+fi
 
 # Ensure ImageMagick binaries are fetched
 echo "Ensuring ImageMagick binaries are available..."
@@ -109,13 +139,19 @@ fi
 cp README.md "$RELEASE_DIR/"
 
 # Create archive
-ARCHIVE_NAME="truffle-${PLATFORM_DIR}.tar.gz"
+if [ -n "$VERSION" ]; then
+    ARCHIVE_NAME="truffle-${VERSION}-${PLATFORM_DIR}"
+else
+    ARCHIVE_NAME="truffle-${PLATFORM_DIR}"
+fi
+
 if [ "$PLATFORM" = "windows" ]; then
-    ARCHIVE_NAME="truffle-${PLATFORM_DIR}.zip"
+    ARCHIVE_NAME="${ARCHIVE_NAME}.zip"
     cd release
     zip -r "$ARCHIVE_NAME" "truffle-${PLATFORM_DIR}"
     cd ..
 else
+    ARCHIVE_NAME="${ARCHIVE_NAME}.tar.gz"
     cd release
     tar -czf "$ARCHIVE_NAME" "truffle-${PLATFORM_DIR}"
     cd ..

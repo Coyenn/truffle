@@ -53,6 +53,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
       - name: Extract version from tag
         id: version
         run: |
@@ -64,25 +67,30 @@ jobs:
       - name: Build project
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create zip file (Linux/macOS)
+      - name: Fetch ImageMagick binaries (Linux/macOS)
         if: matrix.os-name != 'windows'
         run: |
-          ZIP_NAME="truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
-          zip "$ZIP_NAME" target/${{ matrix.target }}/release/truffle
+          chmod +x scripts/fetch_imagemagick.sh
+          bash scripts/fetch_imagemagick.sh
         shell: bash
 
-      - name: Create zip file (Windows)
+      - name: Fetch ImageMagick binaries (Windows)
         if: matrix.os-name == 'windows'
         run: |
-          ZIP_NAME="truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
-          powershell Compress-Archive -Path target\${{ matrix.target }}\release\truffle.exe -DestinationPath $ZIP_NAME
+          powershell -ExecutionPolicy Bypass -File scripts/fetch_imagemagick.ps1
+        shell: bash
+
+      - name: Package release
+        run: |
+          chmod +x scripts/package_release.sh
+          scripts/package_release.sh ${{ matrix.target }} --skip-build --version ${{ steps.version.outputs.version }}
         shell: bash
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v5
         with:
           name: truffle-${{ matrix.os-name }}-x86_64
-          path: truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip
+          path: release/truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.*
           retention-days: 30
 
   release:
@@ -111,9 +119,9 @@ jobs:
         uses: softprops/action-gh-release@v2.4.2
         with:
           files: |
-            artifacts/truffle-linux-x86_64/truffle-${{ steps.version.outputs.version }}-linux-x86_64.zip
+            artifacts/truffle-linux-x86_64/truffle-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
             artifacts/truffle-windows-x86_64/truffle-${{ steps.version.outputs.version }}-windows-x86_64.zip
-            artifacts/truffle-macos-x86_64/truffle-${{ steps.version.outputs.version }}-macos-x86_64.zip
+            artifacts/truffle-macos-x86_64/truffle-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
