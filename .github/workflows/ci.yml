@@ -53,6 +53,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+
       - name: Extract version from tag
         id: version
         run: |
