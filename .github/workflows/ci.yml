@@ -67,36 +67,18 @@ jobs:
       - name: Build project
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Setup ImageMagick (Linux)
-        if: matrix.os-name == 'linux'
+      - name: Setup ImageMagick from GitHub Releases
+        if: matrix.os-name != 'windows'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          mkdir -p vendor/imagemagick/linux-x86_64
-          cp $(which magick) vendor/imagemagick/linux-x86_64/magick
-          chmod +x vendor/imagemagick/linux-x86_64/magick
+          chmod +x scripts/fetch_imagemagick.sh
+          bash scripts/fetch_imagemagick.sh
         shell: bash
 
-      - name: Setup ImageMagick (macOS)
-        if: matrix.os-name == 'macos'
-        run: |
-          brew install imagemagick
-          mkdir -p vendor/imagemagick/macos-x86_64
-          cp $(which magick) vendor/imagemagick/macos-x86_64/magick
-          chmod +x vendor/imagemagick/macos-x86_64/magick
-        shell: bash
-
-      - name: Setup ImageMagick (Windows)
+      - name: Setup ImageMagick from GitHub Releases (Windows)
         if: matrix.os-name == 'windows'
         run: |
-          choco install imagemagick -y
-          New-Item -ItemType Directory -Force -Path vendor\imagemagick\windows-x86_64 | Out-Null
-          $magickPath = (Get-Command magick).Source
-          Copy-Item $magickPath vendor\imagemagick\windows-x86_64\magick.exe
-          # Copy required DLLs if they exist in the same directory
-          $magickDir = Split-Path $magickPath
-          Get-ChildItem -Path $magickDir -Filter "*.dll" | Copy-Item -Destination vendor\imagemagick\windows-x86_64\
-        shell: powershell
+          powershell -ExecutionPolicy Bypass -File scripts/fetch_imagemagick.ps1
+        shell: bash
 
       - name: Package release
         run: |
