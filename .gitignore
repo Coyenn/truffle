@@ -5,3 +5,4 @@ truffle
 .env*
 .DS_Store
 /target
+/vendor
