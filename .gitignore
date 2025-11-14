@@ -1,2 +1,7 @@
+.idea
 .vscode
+.direnv
 truffle
+.env*
+.DS_Store
+/target
