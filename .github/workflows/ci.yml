@@ -67,17 +67,11 @@ jobs:
       - name: Build project
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Setup ImageMagick from GitHub Releases
-        if: matrix.os-name != 'windows'
+      - name: Setup ImageMagick from GitHub Releases (Linux only)
+        if: matrix.os-name == 'linux'
         run: |
           chmod +x scripts/fetch_imagemagick.sh
           bash scripts/fetch_imagemagick.sh
-        shell: bash
-
-      - name: Setup ImageMagick from GitHub Releases (Windows)
-        if: matrix.os-name == 'windows'
-        run: |
-          powershell -ExecutionPolicy Bypass -File scripts/fetch_imagemagick.ps1
         shell: bash
 
       - name: Package release

@@ -88,20 +88,22 @@ else
     echo "Skipping build (binary should already exist)"
 fi
 
-# Ensure ImageMagick binaries are fetched
-echo "Ensuring ImageMagick binaries are available..."
-if [ "$PLATFORM" = "windows" ]; then
-    echo "Please run scripts/fetch_imagemagick.ps1 on Windows to fetch ImageMagick binaries"
-    echo "For now, assuming binaries are already present..."
-else
+# Ensure ImageMagick binaries are fetched (Linux only)
+if [ "$PLATFORM" = "linux" ]; then
+    echo "Ensuring ImageMagick binaries are available..."
     bash "$SCRIPT_DIR/fetch_imagemagick.sh"
+else
+    echo "Skipping ImageMagick bundling (only bundled for Linux)"
 fi
 
 # Create release directory
 RELEASE_DIR="release/truffle-${PLATFORM_DIR}"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR/bin"
-mkdir -p "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}"
+# Only create ImageMagick vendor directory for Linux
+if [ "$PLATFORM" = "linux" ]; then
+    mkdir -p "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}"
+fi
 
 # Copy binary
 BINARY_SRC="target/${TARGET}/release/${BINARY_NAME}"
@@ -116,23 +118,20 @@ if [ "$PLATFORM" != "windows" ]; then
     chmod +x "$RELEASE_DIR/bin/${BINARY_NAME}"
 fi
 
-# Copy ImageMagick binary
-IMAGEMAGICK_SRC="vendor/imagemagick/${PLATFORM_DIR}"
-if [ ! -d "$IMAGEMAGICK_SRC" ]; then
-    echo "Error: ImageMagick binaries not found at $IMAGEMAGICK_SRC"
-    echo "Please run scripts/fetch_imagemagick.sh first"
-    exit 1
-fi
-
-if [ "$PLATFORM" = "windows" ]; then
-    cp "$IMAGEMAGICK_SRC/magick.exe" "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}/"
-    # Copy any DLLs
-    if ls "$IMAGEMAGICK_SRC"/*.dll 1> /dev/null 2>&1; then
-        cp "$IMAGEMAGICK_SRC"/*.dll "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}/"
+# Copy ImageMagick binary (Linux only)
+if [ "$PLATFORM" = "linux" ]; then
+    IMAGEMAGICK_SRC="vendor/imagemagick/${PLATFORM_DIR}"
+    if [ ! -d "$IMAGEMAGICK_SRC" ]; then
+        echo "Error: ImageMagick binaries not found at $IMAGEMAGICK_SRC"
+        echo "Please run scripts/fetch_imagemagick.sh first"
+        exit 1
     fi
-else
+    
     cp "$IMAGEMAGICK_SRC/magick" "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}/"
     chmod +x "$RELEASE_DIR/vendor/imagemagick/${PLATFORM_DIR}/magick"
+    echo "✅ Bundled ImageMagick binary"
+else
+    echo "ℹ️  ImageMagick not bundled for $PLATFORM (users need to install system-wide)"
 fi
 
 # Copy README
