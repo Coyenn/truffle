@@ -76,10 +76,11 @@ jobs:
 
       - name: Create zip file (Windows)
         if: matrix.os-name == 'windows'
+        shell: pwsh
         run: |
-          ZIP_NAME="truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
-          powershell Compress-Archive -Path target\${{ matrix.target }}\release\truffle.exe -DestinationPath $ZIP_NAME
-        shell: bash
+          $zipName = "truffle-${{ steps.version.outputs.version }}-${{ matrix.os-name }}-x86_64.zip"
+          $binary = Join-Path "target" "${{ matrix.target }}" "release" "truffle.exe"
+          Compress-Archive -Path $binary -DestinationPath $zipName -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v5
