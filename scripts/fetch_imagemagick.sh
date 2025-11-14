@@ -77,16 +77,45 @@ TEMP_DIR=$(mktemp -d)
 TEMP_TARBALL="${TEMP_DIR}/${TARBALL}"
 
 echo "Downloading ImageMagick for $PLATFORM-$ARCH_SUFFIX..."
-curl -L -o "$TEMP_TARBALL" "$URL" || {
-  echo "Failed to download ImageMagick. You may need to manually download from:"
-  echo "  https://imagemagick.org/script/download.php"
-  echo "  Or use a different version/URL"
+HTTP_CODE=$(curl -L -o "$TEMP_TARBALL" -w "%{http_code}" -s "$URL")
+
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "Error: Failed to download ImageMagick (HTTP $HTTP_CODE)"
+  echo ""
+  echo "ImageMagick static binaries are not available at the expected URL."
+  echo "Please use one of these alternatives:"
+  echo ""
+  echo "Option 1: Install ImageMagick system-wide and copy the binary:"
+  echo "  Linux: sudo apt-get install imagemagick"
+  echo "  macOS: brew install imagemagick"
+  echo "  Then copy: cp \$(which magick) $PLATFORM_DIR/magick"
+  echo ""
+  echo "Option 2: Build ImageMagick statically from source"
+  echo "Option 3: Use a pre-built static binary from a third-party source"
+  echo ""
+  echo "For CI/CD, consider using system ImageMagick or building statically."
+  rm -rf "$TEMP_DIR"
   exit 1
-}
+fi
+
+# Verify the downloaded file is actually a gzip archive
+if ! file "$TEMP_TARBALL" | grep -q "gzip\|tar"; then
+  echo "Error: Downloaded file is not a valid archive"
+  echo "The URL may have returned an HTML error page"
+  echo "First 200 bytes of response:"
+  head -c 200 "$TEMP_TARBALL"
+  echo ""
+  rm -rf "$TEMP_DIR"
+  exit 1
+fi
 
 echo "Extracting ImageMagick..."
 cd "$TEMP_DIR"
-tar -xzf "$TEMP_TARBALL"
+if ! tar -xzf "$TEMP_TARBALL" 2>/dev/null; then
+  echo "Error: Failed to extract archive. The file may be corrupted or not a valid tar.gz"
+  rm -rf "$TEMP_DIR"
+  exit 1
+fi
 
 # Find the magick binary in the extracted directory
 EXTRACTED_DIR=$(find . -maxdepth 1 -type d -name "ImageMagick-*" | head -1)
