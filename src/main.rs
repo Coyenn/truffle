@@ -1,3 +1,4 @@
+mod assets;
 mod commands;
 
 use clap::{Parser, Subcommand};
@@ -28,4 +29,3 @@ fn main() {
 
     std::process::exit(if result { 0 } else { 1 });
 }
-
