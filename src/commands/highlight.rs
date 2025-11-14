@@ -5,7 +5,7 @@ use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(about = "Generate highlight variants of PNG images with white outlines")]
-pub struct HighlightsArgs {
+pub struct HighlightArgs {
     /// Input path (file or directory)
     #[arg(value_name = "INPUT_PATH")]
     pub input_path: PathBuf,
@@ -30,7 +30,9 @@ fn check_magick() -> Result<(), String> {
         .map_err(|_| "magick (ImageMagick) is not available. Please install ImageMagick.")?;
 
     if !output.status.success() {
-        return Err("magick (ImageMagick) is not available. Please install ImageMagick.".to_string());
+        return Err(
+            "magick (ImageMagick) is not available. Please install ImageMagick.".to_string(),
+        );
     }
 
     Ok(())
@@ -57,54 +59,75 @@ fn process_image(
     let highlight_path = get_highlight_path(image_path);
 
     if highlight_path.exists() && !force {
-        println!("[highlights] SKIP: {} (highlight already exists)", image_path.display());
+        println!(
+            "[highlight] SKIP: {} (highlight already exists)",
+            image_path.display()
+        );
         return Ok(false);
     }
 
     if dry_run {
-        println!("[highlights] DRY-RUN: Would generate {}", highlight_path.display());
+        println!(
+            "[highlight] DRY-RUN: Would generate {}",
+            highlight_path.display()
+        );
         return Ok(true);
     }
 
-    println!("[highlights] Processing: {}", image_path.display());
+    println!("[highlight] Processing: {}", image_path.display());
 
     let thickness_str = thickness.to_string();
     let diamond_str = format!("Diamond:{}", thickness);
     let shave_str = thickness.to_string();
-    
+
     let magick_args = vec![
         image_path.to_str().unwrap(),
-        "-write", "mpr:original",
+        "-write",
+        "mpr:original",
         "+delete",
         "(",
         "mpr:original",
-        "-alpha", "extract",
-        "-bordercolor", "black",
-        "-border", &thickness_str,
-        "-morphology", "EdgeIn",
+        "-alpha",
+        "extract",
+        "-bordercolor",
+        "black",
+        "-border",
+        &thickness_str,
+        "-morphology",
+        "EdgeIn",
         &diamond_str,
-        "-shave", &shave_str,
-        "-write", "mpr:outline-mask",
+        "-shave",
+        &shave_str,
+        "-write",
+        "mpr:outline-mask",
         "+delete",
         ")",
         "(",
         "mpr:original",
-        "-alpha", "off",
-        "-fill", "white",
-        "-colorize", "100",
-        "-channel", "A",
+        "-alpha",
+        "off",
+        "-fill",
+        "white",
+        "-colorize",
+        "100",
+        "-channel",
+        "A",
         "mpr:outline-mask",
-        "-compose", "CopyOpacity",
+        "-compose",
+        "CopyOpacity",
         "-composite",
         "+channel",
-        "-write", "mpr:white-outline",
+        "-write",
+        "mpr:white-outline",
         "+delete",
         ")",
         "mpr:original",
         "mpr:white-outline",
-        "-compose", "Over",
+        "-compose",
+        "Over",
         "-composite",
-        "-filter", "Point",
+        "-filter",
+        "Point",
         highlight_path.to_str().unwrap(),
     ];
 
@@ -115,10 +138,14 @@ fn process_image(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to generate highlight for {}: {}", image_path.display(), stderr));
+        return Err(format!(
+            "Failed to generate highlight for {}: {}",
+            image_path.display(),
+            stderr
+        ));
     }
 
-    println!("[highlights] ✅ Generated: {}", highlight_path.display());
+    println!("[highlight] ✅ Generated: {}", highlight_path.display());
     Ok(true)
 }
 
@@ -154,7 +181,8 @@ fn process_path(
             .map(|e| e.path().to_path_buf())
             .filter(|p| {
                 p.extension().and_then(|s| s.to_str()) == Some("png")
-                    && !p.file_name()
+                    && !p
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .map(|n| n.contains("-highlight.png"))
                         .unwrap_or(false)
@@ -162,11 +190,14 @@ fn process_path(
             .collect();
 
         if png_files.is_empty() {
-            println!("[highlights] No PNG files found in: {}", path.display());
+            println!("[highlight] No PNG files found in: {}", path.display());
             return Ok((0, 0, 0));
         }
 
-        println!("[highlights] Found {} PNG file(s) to process", png_files.len());
+        println!(
+            "[highlight] Found {} PNG file(s) to process",
+            png_files.len()
+        );
 
         for file in png_files {
             match process_image(&file, dry_run, force, thickness) {
@@ -185,10 +216,10 @@ fn process_path(
     }
 
     if dry_run {
-        println!("[highlights] DRY-RUN: Would process {} file(s)", processed);
+        println!("[highlight] DRY-RUN: Would process {} file(s)", processed);
     } else {
         println!(
-            "[highlights] Done ✅ Processed: {}, Skipped: {}, Errors: {}",
+            "[highlight] Done ✅ Processed: {}, Skipped: {}, Errors: {}",
             processed, skipped, errors
         );
     }
@@ -196,23 +227,22 @@ fn process_path(
     Ok((processed, skipped, errors))
 }
 
-pub fn run(args: HighlightsArgs) -> bool {
+pub fn run(args: HighlightArgs) -> bool {
     if args.thickness < 1 {
-        eprintln!("[highlights] ERROR: Thickness must be >= 1");
+        eprintln!("[highlight] ERROR: Thickness must be >= 1");
         return false;
     }
 
     if let Err(e) = check_magick() {
-        eprintln!("[highlights] ERROR: {}", e);
+        eprintln!("[highlight] ERROR: {}", e);
         return false;
     }
 
     match process_path(&args.input_path, args.dry_run, args.force, args.thickness) {
         Ok((processed, _, _)) => processed > 0 || args.dry_run,
         Err(e) => {
-            eprintln!("[highlights] ERROR: {}", e);
+            eprintln!("[highlight] ERROR: {}", e);
             false
         }
     }
 }
-

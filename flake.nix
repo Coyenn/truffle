@@ -27,7 +27,7 @@
         buildInputs = with pkgs; [
           rustToolchain
           pkg-config
-          # ImageMagick for highlights command
+          # ImageMagick for highlight command
           imagemagick
         ];
       in {

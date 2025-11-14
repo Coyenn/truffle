@@ -1,6 +1,6 @@
 # Truffle
 
-A Rust CLI tool for managing assets and generating image highlights.
+A Rust CLI tool for managing assets and generating image highlight.
 
 ## Installation
 
@@ -36,12 +36,12 @@ truffle sync [OPTIONS]
 **Description:**
 Runs `asphalt sync` to sync assets, then augments the asset metadata with PNG image dimensions and highlight variant IDs. The command reads the assets file (supports both Luau and JSON formats), processes PNG files to extract dimensions, and writes updated Luau and TypeScript declaration files.
 
-### highlights
+### highlight
 
 Generate highlight variants of PNG images with white outlines.
 
 ```bash
-truffle highlights <INPUT_PATH> [OPTIONS]
+truffle highlight <INPUT_PATH> [OPTIONS]
 ```
 
 **Arguments:**
@@ -58,19 +58,19 @@ truffle highlights <INPUT_PATH> [OPTIONS]
 **Examples:**
 ```bash
 # Process a single file
-truffle highlights assets/images/character/base.png
+truffle highlight assets/images/character/base.png
 
 # Process a directory recursively
-truffle highlights assets/images/character/
+truffle highlight assets/images/character/
 
 # Dry run to preview changes
-truffle highlights assets/images/ --dry-run
+truffle highlight assets/images/ --dry-run
 
-# Force overwrite existing highlights
-truffle highlights assets/images/ --force
+# Force overwrite existing highlight
+truffle highlight assets/images/ --force
 
 # Custom thickness
-truffle highlights assets/images/ --thickness 2
+truffle highlight assets/images/ --thickness 2
 ```
 
 **Description:**
@@ -88,7 +88,7 @@ cargo build
 
 ```bash
 cargo run -- sync
-cargo run -- highlights assets/images/
+cargo run -- highlight assets/images/
 ```
 
 ### Testing

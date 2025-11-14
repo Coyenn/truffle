@@ -1,3 +1,2 @@
+pub mod highlight;
 pub mod sync;
-pub mod highlights;
-
