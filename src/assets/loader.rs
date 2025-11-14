@@ -41,7 +41,7 @@ fn parse_luau_assets_module(content: &str) -> Result<BTreeMap<String, AssetValue
     Err("Could not find assets table in Luau file".to_string())
 }
 
-fn find_local_assets_table<'a>(block: &'a ast::Block) -> Option<&'a ast::TableConstructor> {
+fn find_local_assets_table(block: &ast::Block) -> Option<&ast::TableConstructor> {
     for stmt in block.stmts() {
         if let ast::Stmt::LocalAssignment(local_assign) = stmt {
             for (name, expr) in local_assign
@@ -60,7 +60,7 @@ fn find_local_assets_table<'a>(block: &'a ast::Block) -> Option<&'a ast::TableCo
     None
 }
 
-fn find_assets_table_in_return<'a>(block: &'a ast::Block) -> Option<&'a ast::TableConstructor> {
+fn find_assets_table_in_return(block: &ast::Block) -> Option<&ast::TableConstructor> {
     match block.last_stmt()? {
         ast::LastStmt::Return(ret) => {
             for expr in ret.returns().iter() {

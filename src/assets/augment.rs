@@ -29,7 +29,7 @@ pub fn augment_assets(
             augment_node(
                 node.clone(),
                 assets,
-                &[category.clone()],
+                std::slice::from_ref(category),
                 images_folder,
                 reader,
             ),
