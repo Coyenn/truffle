@@ -21,13 +21,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run cargo fmt check
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --all
 
   build:
     runs-on: ${{ matrix.os }}
@@ -65,7 +65,7 @@ jobs:
         shell: bash
 
       - name: Build project
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --package truffle --target ${{ matrix.target }}
 
       - name: Create zip file (Linux/macOS)
         if: matrix.os-name != 'windows'
