@@ -4,7 +4,7 @@
 
 > A fast Rust CLI for managing 2D Roblox game assets. Turning Asphalt metadata into Luau + TypeScript catalogs enriched with per-image width/height and highlight variants.
 
-Truffle acts as the connective between your art pipeline and the runtime you ship to. It ingests the metadata produced by [Asphalt](https://github.com/jackTabsCode/asphalt), augments each PNG with 2D-friendly properties (dimensions, highlight IDs), emits fresh Luau + TypeScript modules, and regenerates the outline variants you showcase in-game.
+Truffle acts as the connective between your art pipeline and the runtime you ship to. It bundles [Asphalt](https://github.com/jackTabsCode/asphalt) to sync assets to Roblox, augments each PNG with 2D-friendly properties (dimensions, highlight IDs), emits fresh Luau + TypeScript modules, and regenerates the outline variants you showcase in-game.
 
 ## Quick Links
 
@@ -35,24 +35,68 @@ The optimized binary will be available in `target/release/truffle` (or `truffle.
 
 ## Quick Start
 
-```bash
-# 1. Refresh Luau + TypeScript assets after an Asphalt sync
-truffle sync \
-  --assets-input src/shared/data/assets/assets.luau \
-  --dts-output src/shared/data/assets/assets.d.ts \
-  --images-folder assets/images
+1. Create a `truffle.toml` configuration file (see Configuration below)
+2. Set `TRUFFLE_API_KEY` environment variable with your Roblox API key
+3. Run `truffle sync` to sync assets and generate augmented modules
 
-# 2. Generate highlight variants for every PNG in a folder
+```bash
+# Sync assets and generate Luau + TypeScript modules
+truffle sync
+
+# Generate highlight variants for every PNG in a folder
 truffle highlight assets/images --thickness 2
 ```
 
-Set `ASPHALT_API_KEY` (or pass `--asphalt-api-key`) so Truffle can invoke `asphalt sync` on your behalf.
+## Configuration
+
+Truffle uses a `truffle.toml` configuration file that extends Asphalt's configuration. This file should be placed in your project root.
+
+### Example `truffle.toml`
+
+```toml
+# All Asphalt configuration options are supported
+[creator]
+type = "user"
+id = 9670971
+
+[codegen]
+typescript = true
+style = "flat"
+
+[inputs.assets]
+path = "assets/**/*"
+output_path = "src/shared"
+
+# Truffle-specific options
+[truffle]
+# Automatically generate highlight variants after sync
+auto_highlight = true
+# Default highlight thickness (used when auto_highlight is true)
+highlight_thickness = 2
+# Force regenerate highlights even if they exist
+highlight_force = false
+```
+
+### Configuration Options
+
+#### Asphalt Options
+
+All options from [Asphalt's configuration](https://github.com/jackTabsCode/asphalt?tab=readme-ov-file#configuration) are supported:
+- `creator`: Roblox creator (user or group) to upload assets under
+- `codegen`: Code generation options (TypeScript, style, etc.)
+- `inputs`: Asset input configurations (paths, output directories, etc.)
+
+#### Truffle Options
+
+- `auto_highlight` (default: `false`): Automatically generate highlight variants after syncing assets
+- `highlight_thickness` (default: `1`): Outline thickness in pixels for auto-generated highlights
+- `highlight_force` (default: `false`): Force regenerate highlights even if they already exist
 
 ## Commands
 
 ### `truffle sync`
 
-Pulls the latest data from your Asphalt backend, then augments the Luau asset module with PNG metadata and highlight variant IDs. Finally, it emits a strongly-typed `.d.ts` file so TypeScript projects can statically reason about the same asset set.
+Syncs assets to Roblox using the bundled Asphalt, then augments the Luau asset module with PNG metadata and highlight variant IDs. Finally, it emits a strongly-typed `.d.ts` file so TypeScript projects can statically reason about the same asset set.
 
 | Option | Description | Default |
 | --- | --- | --- |
@@ -60,12 +104,12 @@ Pulls the latest data from your Asphalt backend, then augments the Luau asset mo
 | `--assets-output <PATH>` | Location to write the augmented module | `src/shared/data/assets/assets.luau` |
 | `--dts-output <PATH>` | Path for generated TypeScript definitions | `src/shared/data/assets/assets.d.ts` |
 | `--images-folder <PATH>` | Root folder that contains PNG sources | `assets/images` |
-| `--asphalt-api-key <KEY>` | API key override (otherwise `.env`/env var) | `ASPHALT_API_KEY` |
+| `--api-key <KEY>` | API key override (otherwise `.env`/env var) | `TRUFFLE_API_KEY` |
 
 Requirements:
 
-- `asphalt` CLI installed and accessible on your `PATH`.
-- `ASPHALT_API_KEY` exported or provided via `--asphalt-api-key`.
+- `truffle.toml` configuration file in the project root
+- `TRUFFLE_API_KEY` environment variable set (or provided via `--api-key`)
 
 ### `truffle highlight`
 
@@ -109,3 +153,13 @@ cargo test
 ```
 
 CI runs fmt, clippy, and tests on every push or pull request. Tagged releases additionally build and upload platform-specific archives.
+
+## Authentication
+
+Set the `TRUFFLE_API_KEY` environment variable with your Roblox Open Cloud API key. You can get one from the [Creator Dashboard](https://create.roblox.com/credentials).
+
+The following permissions are required:
+- `asset:read`
+- `asset:write`
+
+Make sure that your API key is under the Creator (user or group) that you've defined in `truffle.toml`.

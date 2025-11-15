@@ -1,4 +1,4 @@
-use crate::highlight;
+use crate::image::highlight;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -21,6 +21,10 @@ pub struct HighlightArgs {
     /// Outline thickness in pixels
     #[arg(long, default_value = "1")]
     pub thickness: u32,
+
+    /// Recursively process directories
+    #[arg(short, long)]
+    pub recursive: bool,
 }
 
 fn get_highlight_path(image_path: &Path) -> PathBuf {
@@ -77,6 +81,7 @@ fn process_path(
     dry_run: bool,
     force: bool,
     thickness: u32,
+    recursive: bool,
 ) -> Result<(usize, usize, usize), String> {
     let mut processed = 0;
     let mut skipped = 0;
@@ -97,20 +102,38 @@ fn process_path(
             Err(_) => errors += 1,
         }
     } else {
-        let png_files: Vec<PathBuf> = WalkDir::new(path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_path_buf())
-            .filter(|p| {
-                p.extension().and_then(|s| s.to_str()) == Some("png")
-                    && !p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.contains("-highlight.png"))
-                        .unwrap_or(false)
-            })
-            .collect();
+        let png_files: Vec<PathBuf> = if recursive {
+            WalkDir::new(path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+                .map(|e| e.path().to_path_buf())
+                .filter(|p| {
+                    p.extension().and_then(|s| s.to_str()) == Some("png")
+                        && !p
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.contains("-highlight.png"))
+                            .unwrap_or(false)
+                })
+                .collect()
+        } else {
+            // Non-recursive: only process files directly in the directory
+            std::fs::read_dir(path)
+                .map_err(|e| format!("Failed to read directory: {}", e))?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.extension().and_then(|s| s.to_str()) == Some("png")
+                        && !p
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.contains("-highlight.png"))
+                            .unwrap_or(false)
+                })
+                .collect()
+        };
 
         if png_files.is_empty() {
             println!("[highlight] No PNG files found in: {}", path.display());
@@ -156,7 +179,13 @@ pub fn run(args: HighlightArgs) -> bool {
         return false;
     }
 
-    match process_path(&args.input_path, args.dry_run, args.force, args.thickness) {
+    match process_path(
+        &args.input_path,
+        args.dry_run,
+        args.force,
+        args.thickness,
+        args.recursive,
+    ) {
         Ok((processed, _, _)) => processed > 0 || args.dry_run,
         Err(e) => {
             eprintln!("[highlight] ERROR: {}", e);

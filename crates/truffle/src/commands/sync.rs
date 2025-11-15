@@ -1,9 +1,12 @@
 use crate::assets::{
     augment_assets, load_assets, render_dts_module, render_luau_module, FsImageMetadata,
 };
-use crate::commands::highlight::HighlightArgs;
+use crate::commands::image::HighlightArgs;
 use anyhow::Context;
-use asphalt::{cli::{SyncArgs as AsphaltSyncArgs, SyncTarget}, sync};
+use asphalt::{
+    cli::{SyncArgs as AsphaltSyncArgs, SyncTarget},
+    sync,
+};
 use clap::Parser;
 use indicatif::MultiProgress;
 use std::fs;
@@ -37,7 +40,7 @@ pub struct SyncArgs {
 
 pub fn run(args: SyncArgs) -> bool {
     let rt = Runtime::new().expect("Failed to create tokio runtime");
-    
+
     rt.block_on(async {
         match run_async(args).await {
             Ok(()) => true,
@@ -94,8 +97,11 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
             dry_run: false,
             force: config.truffle.highlight_force,
             thickness: config.truffle.highlight_thickness,
+            recursive: true,
         };
-        crate::commands::highlight::run(highlight_args);
+        crate::commands::image::run(crate::commands::image::ImageCommands::Highlight(
+            highlight_args,
+        ));
     }
 
     println!("[sync] Done ✅");
