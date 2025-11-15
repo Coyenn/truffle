@@ -61,6 +61,21 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
     // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
     let api_key = resolve_api_key(args.api_key)?;
 
+    // Auto-generate highlights if configured (before sync so they get synced too)
+    if config.truffle.auto_highlight {
+        println!("[sync] Generating highlight variants …");
+        let highlight_args = HighlightArgs {
+            input_path: args.images_folder.clone(),
+            dry_run: false,
+            force: config.truffle.highlight_force,
+            thickness: config.truffle.highlight_thickness,
+            recursive: true,
+        };
+        crate::commands::image::run(crate::commands::image::ImageCommands::Highlight(
+            highlight_args,
+        ));
+    }
+
     // Run Asphalt sync
     println!("[sync] Running backend sync …");
     let multi_progress = MultiProgress::new();
@@ -88,21 +103,6 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
     println!("[sync] Writing TypeScript declaration …");
     fs::write(&args.dts_output, render_dts_module(&augmented_assets))
         .context("Failed to write TypeScript file")?;
-
-    // Auto-generate highlights if configured
-    if config.truffle.auto_highlight {
-        println!("[sync] Generating highlight variants …");
-        let highlight_args = HighlightArgs {
-            input_path: args.images_folder.clone(),
-            dry_run: false,
-            force: config.truffle.highlight_force,
-            thickness: config.truffle.highlight_thickness,
-            recursive: true,
-        };
-        crate::commands::image::run(crate::commands::image::ImageCommands::Highlight(
-            highlight_args,
-        ));
-    }
 
     println!("[sync] Done ✅");
     Ok(())

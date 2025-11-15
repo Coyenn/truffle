@@ -69,7 +69,7 @@ output_path = "src/shared"
 
 # Truffle-specific options
 [truffle]
-# Automatically generate highlight variants after sync
+# Automatically generate highlight variants
 auto_highlight = true
 # Default highlight thickness (used when auto_highlight is true)
 highlight_thickness = 2
