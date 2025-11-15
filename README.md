@@ -1,12 +1,29 @@
 # Truffle
 
-A Rust CLI tool for managing assets and generating image highlight.
+![CI](https://github.com/Coyenn/truffle/actions/workflows/ci.yml/badge.svg)
+
+> A fast Rust CLI for managing 2D Roblox game assets. Turning Asphalt metadata into Luau + TypeScript catalogs enriched with per-image width/height and highlight variants.
+
+Truffle acts as the connective between your art pipeline and the runtime you ship to. It ingests the metadata produced by [Asphalt](https://github.com/jackTabsCode/asphalt), augments each PNG with 2D-friendly properties (dimensions, highlight IDs), emits fresh Luau + TypeScript modules, and regenerates the outline variants you showcase in-game.
+
+## Quick Links
+
+- [Releases](https://github.com/Coyenn/truffle/releases) – download prebuilt binaries.
+- [Issues](https://github.com/Coyenn/truffle/issues) – file bugs, propose features, or ask questions.
+- [Actions](https://github.com/Coyenn/truffle/actions) – view the latest CI runs.
 
 ## Installation
 
-### From Release Tarballs
+### Prebuilt binaries
 
-Download the appropriate release archive for your platform from the releases page. Extract the archive and add the `bin` directory to your PATH.
+1. Grab the latest archive for your platform from the [releases page](https://github.com/Coyenn/truffle/releases).
+2. Unzip it and place the `truffle` binary somewhere on your `PATH`.
+
+### Using Cargo
+
+```bash
+cargo install --path .
+```
 
 ### From Source
 
@@ -14,107 +31,81 @@ Download the appropriate release archive for your platform from the releases pag
 cargo build --release
 ```
 
-The binary will be available at `target/release/truffle` (or `target/release/truffle.exe` on Windows).
+The optimized binary will be available in `target/release/truffle` (or `truffle.exe` on Windows). Add that directory to your `PATH` or copy it into your toolchain.
+
+## Quick Start
+
+```bash
+# 1. Refresh Luau + TypeScript assets after an Asphalt sync
+truffle sync \
+  --assets-input src/shared/data/assets/assets.luau \
+  --dts-output src/shared/data/assets/assets.d.ts \
+  --images-folder assets/images
+
+# 2. Generate highlight variants for every PNG in a folder
+truffle highlight assets/images --thickness 2
+```
+
+Set `ASPHALT_API_KEY` (or pass `--asphalt-api-key`) so Truffle can invoke `asphalt sync` on your behalf.
 
 ## Commands
 
-### sync
+### `truffle sync`
 
-Sync assets and augment metadata with image dimensions.
+Pulls the latest data from your Asphalt backend, then augments the Luau asset module with PNG metadata and highlight variant IDs. Finally, it emits a strongly-typed `.d.ts` file so TypeScript projects can statically reason about the same asset set.
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--assets-input <PATH>` | Existing Luau asset registry to read | `src/shared/data/assets/assets.luau` |
+| `--assets-output <PATH>` | Location to write the augmented module | `src/shared/data/assets/assets.luau` |
+| `--dts-output <PATH>` | Path for generated TypeScript definitions | `src/shared/data/assets/assets.d.ts` |
+| `--images-folder <PATH>` | Root folder that contains PNG sources | `assets/images` |
+| `--asphalt-api-key <KEY>` | API key override (otherwise `.env`/env var) | `ASPHALT_API_KEY` |
+
+Requirements:
+
+- `asphalt` CLI installed and accessible on your `PATH`.
+- `ASPHALT_API_KEY` exported or provided via `--asphalt-api-key`.
+
+### `truffle highlight`
+
+Creates `*-highlight.png` siblings for every PNG you point it at.
+
+| Argument / Option | Description |
+| --- | --- |
+| `<INPUT_PATH>` | File or directory containing PNGs. Directories are scanned recursively. |
+| `--dry-run` | Log what would happen without touching files. |
+| `--force` | Overwrite existing highlight variants. |
+| `--thickness <N>` | Outline thickness in pixels (default `1`). |
+
+Example flows:
 
 ```bash
-truffle sync [OPTIONS]
-```
+# Preview which assets would change
+truffle highlight assets/images --dry-run
 
-**Options:**
-- `--assets-input <PATH>` - Path to the Luau assets module file (default: `src/shared/data/assets/assets.luau`)
-- `--assets-output <PATH>` - Path to write the augmented Luau assets module (default: `src/shared/data/assets/assets.luau`)
-- `--dts-output <PATH>` - Path to write the TypeScript declaration file (default: `src/shared/data/assets/assets.d.ts`)
-- `--images-folder <PATH>` - Path to the raw assets images folder (default: `assets/images`)
-- `--asphalt-api-key <KEY>` - ASPHALT_API_KEY (or read from environment/.env file)
+# Force-regenerate with thicker outlines
+truffle highlight assets/images --force --thickness 3
 
-**Requirements:**
-- `asphalt` command must be available
-- `ASPHALT_API_KEY` environment variable must be set (or provided via `--asphalt-api-key`)
-
-**Description:**
-Runs `asphalt sync` to sync assets, then augments the asset metadata with PNG image dimensions and highlight variant IDs. The command reads the assets file (supports both Luau and JSON formats), processes PNG files to extract dimensions, and writes updated Luau and TypeScript declaration files.
-
-### highlight
-
-Generate highlight variants of PNG images with white outlines.
-
-```bash
-truffle highlight <INPUT_PATH> [OPTIONS]
-```
-
-**Arguments:**
-- `<INPUT_PATH>` - Input path (file or directory)
-
-**Options:**
-- `--dry-run` - Preview what would be generated without creating files
-- `--force` - Overwrite existing highlight variants
-- `--thickness <N>` - Outline thickness in pixels (default: 1)
-
-**Requirements:**
-- No external dependencies – image processing is handled entirely in-process via Rust crates.
-
-**Examples:**
-```bash
-# Process a single file
+# Target a single file
 truffle highlight assets/images/character/base.png
-
-# Process a directory recursively
-truffle highlight assets/images/character/
-
-# Dry run to preview changes
-truffle highlight assets/images/ --dry-run
-
-# Force overwrite existing highlight
-truffle highlight assets/images/ --force
-
-# Custom thickness
-truffle highlight assets/images/ --thickness 2
 ```
 
-**Description:**
-Processes PNG files to generate highlight variants with white outlines. When given a directory, recursively finds all PNG files (excluding existing `-highlight.png` files) and generates highlight variants for each.
+The command tracks successes, skips, and failures so you can quickly spot assets that need manual attention.
 
 ## Development
 
-### Building
-
 ```bash
-cargo build
-```
-
-### Running
-
-```bash
+# Run the CLI locally
 cargo run -- sync
-cargo run -- highlight assets/images/
-```
+cargo run -- highlight assets/images
 
-### Testing
+# Check format + lints
+cargo fmt
+cargo clippy -- -D warnings
 
-```bash
+# Run tests (including highlight algorithms)
 cargo test
 ```
 
-### Formatting
-
-```bash
-cargo fmt
-```
-
-### Linting
-
-```bash
-cargo clippy
-```
-
-## Bundled Dependencies
-
-### Image Processing
-
-Truffle previously depended on an external ImageMagick binary for highlight generation. The pipeline now uses pure-Rust libraries, so the CLI ships without extra binaries or runtime dependencies. All highlight variants are produced with the built-in processor, ensuring consistent results across platforms.
+CI runs fmt, clippy, and tests on every push or pull request. Tagged releases additionally build and upload platform-specific archives.
