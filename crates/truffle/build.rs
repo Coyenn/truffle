@@ -1,7 +1,7 @@
 fn main() {
     // Try to get version from git tag
     let version = if let Ok(output) = std::process::Command::new("git")
-        .args(&["describe", "--tags", "--always", "--dirty"])
+        .args(["describe", "--tags", "--always", "--dirty"])
         .output()
     {
         if output.status.success() {
@@ -9,7 +9,7 @@ fn main() {
         } else {
             // If git describe fails, try git rev-parse --short HEAD
             if let Ok(output) = std::process::Command::new("git")
-                .args(&["rev-parse", "--short", "HEAD"])
+                .args(["rev-parse", "--short", "HEAD"])
                 .output()
             {
                 if output.status.success() {
