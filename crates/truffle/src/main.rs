@@ -25,6 +25,8 @@ struct Cli {
 enum Commands {
     /// Sync assets and augment metadata with image dimensions
     Sync(commands::sync::SyncArgs),
+    /// Generate a bitmap atlas from a .ttf font
+    Font(commands::font::FontArgs),
     /// Image manipulation commands
     Image {
         #[command(subcommand)]
@@ -37,6 +39,7 @@ fn main() {
 
     let result = match cli.command {
         Commands::Sync(args) => commands::sync::run(args),
+        Commands::Font(args) => commands::font::run(args),
         Commands::Image { command } => commands::image::run(command),
     };
 
