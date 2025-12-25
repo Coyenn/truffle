@@ -2,7 +2,7 @@ mod assets;
 mod commands;
 mod image;
 
-use clap::{builder::styling, Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 
 #[derive(Parser)]
 #[command(name = "truffle")]

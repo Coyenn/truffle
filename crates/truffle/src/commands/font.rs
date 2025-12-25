@@ -22,7 +22,10 @@ pub struct FontArgs {
     pub padding: u32,
 
     /// Charset string; glyphs are packed in this order (left-to-right, top-to-bottom)
-    #[arg(long, default_value = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")]
+    #[arg(
+        long,
+        default_value = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    )]
     pub charset: String,
 
     /// Atlas size in pixels as WxH (e.g. 1024x1024)
@@ -122,14 +125,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         let xoff = args.padding + (inner - gw) / 2;
         let yoff = args.padding + (inner - gh) / 2;
 
-        blit_alpha_white(
-            &mut atlas,
-            cell_x0 + xoff,
-            cell_y0 + yoff,
-            gw,
-            gh,
-            &bitmap,
-        );
+        blit_alpha_white(&mut atlas, cell_x0 + xoff, cell_y0 + yoff, gw, gh, &bitmap);
     }
 
     atlas
@@ -189,14 +185,7 @@ fn fit_pixel_size(
     Ok(px.max(1.0))
 }
 
-fn blit_alpha_white(
-    dst: &mut image::RgbaImage,
-    x0: u32,
-    y0: u32,
-    w: u32,
-    h: u32,
-    alpha: &[u8],
-) {
+fn blit_alpha_white(dst: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32, alpha: &[u8]) {
     let dst_w = dst.width();
     let dst_h = dst.height();
 
@@ -261,5 +250,3 @@ mod tests {
         assert_eq!(capacity, 8);
     }
 }
-
-
