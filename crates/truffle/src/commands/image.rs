@@ -1,4 +1,4 @@
-pub use crate::commands::highlight::{HighlightArgs, run as highlight_run};
+pub use crate::commands::highlight::{run as highlight_run, HighlightArgs};
 
 use clap::Subcommand;
 

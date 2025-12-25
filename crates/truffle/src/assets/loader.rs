@@ -1,4 +1,4 @@
-use super::model::{AssetValue, convert_map_to_asset_meta};
+use super::model::{convert_map_to_asset_meta, AssetValue};
 use full_moon::{ast, tokenizer::TokenType};
 use serde_json;
 use std::collections::BTreeMap;
