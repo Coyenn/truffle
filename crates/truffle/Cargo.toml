@@ -19,3 +19,4 @@ indicatif = "0.18"
 truffle-config = { path = "../truffle-config" }
 asphalt = { path = "../asphalt" }
 fontdue = "0.9"
+ttf-parser = "0.21"

@@ -3052,6 +3052,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "truffle-config",
+ "ttf-parser 0.21.1",
  "walkdir",
 ]
 
