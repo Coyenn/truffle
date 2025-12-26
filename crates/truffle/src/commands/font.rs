@@ -108,9 +108,24 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     let mut px = inner.max(1) as f32;
     px = fit_pixel_size(&font, args.charset.chars(), px, inner)?;
 
-    let mut glyph_metas = Vec::with_capacity(charset_len);
-    for (i, ch) in args.charset.chars().enumerate() {
+    let mut rasterized = Vec::with_capacity(charset_len);
+    let mut min_ymin = i32::MAX;
+    let mut max_ymax = i32::MIN;
+
+    for ch in args.charset.chars() {
         let (metrics, bitmap) = font.rasterize(ch, px);
+        if metrics.width > 0 && metrics.height > 0 {
+            min_ymin = min_ymin.min(metrics.ymin);
+            max_ymax = max_ymax.max(metrics.ymin + metrics.height as i32);
+        }
+        rasterized.push((ch, metrics, bitmap));
+    }
+
+    let baseline_in_inner = if min_ymin == i32::MAX { 0 } else { -min_ymin };
+    let baseline = args.padding + baseline_in_inner.max(0) as u32;
+
+    let mut glyph_metas = Vec::with_capacity(charset_len);
+    for (i, (ch, metrics, bitmap)) in rasterized.into_iter().enumerate() {
 
         // Some glyphs may rasterize to empty; keep cell empty.
         let col = (i as u32) % cols;
@@ -127,9 +142,9 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
 
         if gw > 0 && gh > 0 && gw <= inner && gh <= inner {
             let xoff = args.padding + (inner - gw) / 2;
-            let yoff = args.padding + (inner - gh) / 2;
             draw_x = cell_x0 + xoff;
-            draw_y = cell_y0 + yoff;
+            draw_y = (cell_y0 as i32 + args.padding as i32 + baseline_in_inner + metrics.ymin)
+                .max(0) as u32;
 
             blit_alpha_white(&mut atlas, draw_x, draw_y, gw, gh, &bitmap);
         }
@@ -177,6 +192,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         padding: args.padding,
         inner,
         px,
+        baseline,
         charset: args.charset.clone(),
         glyphs: glyph_metas,
         kerning,
@@ -217,9 +233,10 @@ struct FontAtlasMeta {
     padding: u32,
     inner: u32,
     px: f32,
+    baseline: u32,
     charset: String,
     glyphs: Vec<GlyphMeta>,
-    /// Kerning adjustments in pixels for pairs within the charset.
+    /// Kerng adjustments in pixels for pairs within the charset.
     kerning: Vec<KerningPair>,
 }
 
@@ -291,6 +308,7 @@ fn render_font_dts_module() -> String {
      \tpadding: number;\n\
      \tinner: number;\n\
      \tpx: number;\n\
+     \tbaseline: number;\n\
      \tcharset: string;\n\
      \tglyphs: Record<string, FontGlyph>;\n\
      \tkerning: FontKerningPair[];\n\
@@ -312,6 +330,7 @@ fn serialize_font_luau(meta: &FontAtlasMeta, indent: usize) -> String {
     parts.push(format!("{}padding = {},", inner_indent, meta.padding));
     parts.push(format!("{}inner = {},", inner_indent, meta.inner));
     parts.push(format!("{}px = {},", inner_indent, float_luau(meta.px)));
+    parts.push(format!("{}baseline = {},", inner_indent, meta.baseline));
     parts.push(format!(
         "{}charset = {},",
         inner_indent,
@@ -437,11 +456,18 @@ fn fit_pixel_size(
     for _ in 0..4 {
         let mut max_w = 0u32;
         let mut max_h = 0u32;
+        let mut min_ymin = i32::MAX;
+        let mut max_ymax = i32::MIN;
 
         for ch in charset.clone() {
             let (m, _) = font.rasterize(ch, px);
             max_w = max_w.max(m.width as u32);
             max_h = max_h.max(m.height as u32);
+
+            if m.width > 0 && m.height > 0 {
+                min_ymin = min_ymin.min(m.ymin);
+                max_ymax = max_ymax.max(m.ymin + m.height as i32);
+            }
         }
 
         let max_dim = max_w.max(max_h);
@@ -450,7 +476,13 @@ fn fit_pixel_size(
             return Ok(px.max(1.0));
         }
 
-        if max_w <= inner && max_h <= inner {
+        let baseline_span_ok = if min_ymin == i32::MAX || max_ymax == i32::MIN {
+            true
+        } else {
+            (max_ymax - min_ymin) as u32 <= inner
+        };
+
+        if max_w <= inner && max_h <= inner && baseline_span_ok {
             return Ok(px);
         }
 
