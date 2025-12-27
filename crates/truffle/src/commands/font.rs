@@ -126,7 +126,6 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
 
     let mut glyph_metas = Vec::with_capacity(charset_len);
     for (i, (ch, metrics, bitmap)) in rasterized.into_iter().enumerate() {
-
         // Some glyphs may rasterize to empty; keep cell empty.
         let col = (i as u32) % cols;
         let row = (i as u32) / cols;
