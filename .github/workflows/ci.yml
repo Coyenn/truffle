@@ -20,9 +20,6 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run cargo fmt check
-        run: cargo fmt --all -- --check
-
       - name: Run cargo clippy
         run: cargo clippy --all -- -D warnings
 

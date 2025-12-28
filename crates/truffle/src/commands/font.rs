@@ -39,6 +39,15 @@ pub struct FontArgs {
     /// Output TypeScript declaration file for the Luau module. Defaults to OUTPUT_PNG with .d.ts extension.
     #[arg(long, value_name = "OUTPUT_D_TS")]
     pub dts: Option<PathBuf>,
+
+    /// Generate an outline (thicker fill) variant by dilating glyph alpha by this many pixels.
+    /// 0 disables outline generation.
+    #[arg(long, default_value = "0", value_name = "PX")]
+    pub outline: u32,
+
+    /// Output PNG atlas path for the outline variant. Defaults to OUTPUT_PNG with `_outline.png` suffix.
+    #[arg(long, value_name = "OUTPUT_OUTLINE_PNG")]
+    pub outline_png: Option<PathBuf>,
 }
 
 pub fn run(args: FontArgs) -> bool {
@@ -59,6 +68,13 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     }
     if args.cell <= args.padding.saturating_mul(2) {
         anyhow::bail!("--cell must be > 2*--padding");
+    }
+    if args.outline > 0 && args.padding < args.outline {
+        anyhow::bail!(
+            "--padding must be >= --outline when outline is enabled (got padding {}, outline {})",
+            args.padding,
+            args.outline
+        );
     }
     if atlas_w == 0 || atlas_h == 0 {
         anyhow::bail!("--size must be > 0x0");
@@ -103,6 +119,16 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to parse font: {e:?}"))?;
 
     let mut atlas = image::RgbaImage::from_pixel(atlas_w, atlas_h, image::Rgba([0, 0, 0, 0]));
+    let outline_enabled = args.outline > 0;
+    let mut outline_atlas = if outline_enabled {
+        Some(image::RgbaImage::from_pixel(
+            atlas_w,
+            atlas_h,
+            image::Rgba([0, 0, 0, 0]),
+        ))
+    } else {
+        None
+    };
 
     // Choose a single pixel size that makes all glyph bitmaps fit within the inner box.
     let mut px = inner.max(1) as f32;
@@ -125,6 +151,11 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     let baseline = args.padding + baseline_in_inner.max(0) as u32;
 
     let mut glyph_metas = Vec::with_capacity(charset_len);
+    let mut outline_glyph_metas = if outline_enabled {
+        Some(Vec::with_capacity(charset_len))
+    } else {
+        None
+    };
     for (i, (ch, metrics, bitmap)) in rasterized.into_iter().enumerate() {
         // Some glyphs may rasterize to empty; keep cell empty.
         let col = (i as u32) % cols;
@@ -146,6 +177,19 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
                 .max(0) as u32;
 
             blit_alpha_white(&mut atlas, draw_x, draw_y, gw, gh, &bitmap);
+
+            if let Some(ref mut outline_atlas) = outline_atlas {
+                let r = args.outline;
+                let (dw, dh, dilated) = dilate_alpha_with_border(&bitmap, gw, gh, r);
+                blit_alpha_white(
+                    outline_atlas,
+                    draw_x.saturating_sub(r),
+                    draw_y.saturating_sub(r),
+                    dw,
+                    dh,
+                    &dilated,
+                );
+            }
         }
 
         glyph_metas.push(GlyphMeta {
@@ -164,11 +208,53 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
             // fontdue provides an advance width in px
             advance: metrics.advance_width,
         });
+
+        if let Some(ref mut outline_glyph_metas) = outline_glyph_metas {
+            let r = args.outline;
+            let (ogw, ogh) = if gw > 0 && gh > 0 {
+                (gw + 2 * r, gh + 2 * r)
+            } else {
+                (0, 0)
+            };
+            outline_glyph_metas.push(GlyphMeta {
+                ch,
+                index: i as u32,
+                col,
+                row,
+                cell_x: cell_x0,
+                cell_y: cell_y0,
+                cell_w: args.cell,
+                cell_h: args.cell,
+                draw_x: draw_x.saturating_sub(r),
+                draw_y: draw_y.saturating_sub(r),
+                draw_w: ogw,
+                draw_h: ogh,
+                advance: metrics.advance_width,
+            });
+        }
     }
 
     atlas
         .save(&args.output_png)
         .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", args.output_png.display()))?;
+
+    let outline_png_path = if outline_enabled {
+        Some(
+            args.outline_png
+                .clone()
+                .unwrap_or_else(|| derive_outline_png_path(&args.output_png)),
+        )
+    } else {
+        None
+    };
+    if let (Some(outline_atlas), Some(outline_png_path)) = (&outline_atlas, &outline_png_path) {
+        outline_atlas.save(outline_png_path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to write outline atlas {}: {e}",
+                outline_png_path.display()
+            )
+        })?;
+    }
 
     let luau_path = args.luau.clone().unwrap_or_else(|| {
         let mut p = args.output_png.clone();
@@ -196,11 +282,25 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         glyphs: glyph_metas,
         kerning,
     };
+    let outline_meta = outline_glyph_metas.map(|outline_glyphs| FontAtlasMeta {
+        atlas_w,
+        atlas_h,
+        cell: args.cell,
+        padding: args.padding,
+        inner,
+        px,
+        baseline,
+        charset: args.charset.clone(),
+        glyphs: outline_glyphs,
+        kerning: meta.kerning.clone(),
+    });
 
-    fs::write(&luau_path, render_font_luau_module(&meta)).map_err(|e| {
-        anyhow::anyhow!("failed to write Luau metadata {}: {e}", luau_path.display())
-    })?;
-    fs::write(&dts_path, render_font_dts_module()).map_err(|e| {
+    fs::write(
+        &luau_path,
+        render_font_luau_module(&meta, outline_meta.as_ref()),
+    )
+    .map_err(|e| anyhow::anyhow!("failed to write Luau metadata {}: {e}", luau_path.display()))?;
+    fs::write(&dts_path, render_font_dts_module(outline_enabled)).map_err(|e| {
         anyhow::anyhow!(
             "failed to write TypeScript declarations {}: {e}",
             dts_path.display()
@@ -221,8 +321,25 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         args.padding,
         charset_len
     );
+    if let Some(outline_png_path) = outline_png_path {
+        println!(
+            "[font] ✅ Wrote outline {} (dilate {}px)",
+            outline_png_path.display(),
+            args.outline
+        );
+    }
 
     Ok(())
+}
+
+fn derive_outline_png_path(base_png: &PathBuf) -> PathBuf {
+    let mut p = base_png.clone();
+    let stem = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("font_atlas");
+    p.set_file_name(format!("{stem}_outline.png"));
+    p
 }
 
 struct FontAtlasMeta {
@@ -256,6 +373,7 @@ struct GlyphMeta {
     advance: f32,
 }
 
+#[derive(Clone)]
 struct KerningPair {
     left: char,
     right: char,
@@ -263,22 +381,31 @@ struct KerningPair {
     kern: f32,
 }
 
-fn render_font_luau_module(meta: &FontAtlasMeta) -> String {
-    format!(
-        "-- This file is automatically @generated by truffle.\n\
-         -- DO NOT EDIT MANUALLY.\n\n\
-         local font = {}\n\
-         return {{\n\
-         \tfont = font\n\
-         }}\n",
-        serialize_font_luau(meta, 0)
-    )
+fn render_font_luau_module(meta: &FontAtlasMeta, outline: Option<&FontAtlasMeta>) -> String {
+    let mut s = String::new();
+    s.push_str("-- This file is automatically @generated by truffle.\n");
+    s.push_str("-- DO NOT EDIT MANUALLY.\n\n");
+    s.push_str("local font = ");
+    s.push_str(&serialize_font_luau(meta, 0));
+    s.push_str("\n");
+    if let Some(outline) = outline {
+        s.push_str("local outline = ");
+        s.push_str(&serialize_font_luau(outline, 0));
+        s.push_str("\n");
+    }
+    s.push_str("return {\n");
+    s.push_str("\tfont = font,\n");
+    if outline.is_some() {
+        s.push_str("\toutline = outline,\n");
+    }
+    s.push_str("}\n");
+    s
 }
 
-fn render_font_dts_module() -> String {
+fn render_font_dts_module(has_outline: bool) -> String {
     // This is intentionally simple: the Luau module returns `{ font = ... }`.
     // TS consumers can use the declared shape to read widths/kerning later.
-    "// This file is automatically @generated by truffle.\n\
+    let mut out = "// This file is automatically @generated by truffle.\n\
      // DO NOT EDIT MANUALLY.\n\n\
      export interface FontGlyph {\n\
      \tch: string;\n\
@@ -314,7 +441,13 @@ fn render_font_dts_module() -> String {
      }\n\n\
      declare const font: FontAtlasMeta;\n\
      export { font };\n"
-        .to_string()
+        .to_string();
+    if has_outline {
+        out.push_str("\n");
+        out.push_str("declare const outline: FontAtlasMeta;\n");
+        out.push_str("export { outline };\n");
+    }
+    out
 }
 
 fn serialize_font_luau(meta: &FontAtlasMeta, indent: usize) -> String {
@@ -518,6 +651,58 @@ fn blit_alpha_white(dst: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32
     }
 }
 
+fn dilate_alpha_with_border(alpha: &[u8], w: u32, h: u32, r: u32) -> (u32, u32, Vec<u8>) {
+    if r == 0 || w == 0 || h == 0 {
+        return (w, h, alpha.to_vec());
+    }
+
+    let out_w = w + 2 * r;
+    let out_h = h + 2 * r;
+    let mut expanded = vec![0u8; (out_w * out_h) as usize];
+
+    // Place source bitmap into the center of the expanded buffer.
+    for y in 0..h {
+        let src_row = (y * w) as usize;
+        let dst_row = ((y + r) * out_w + r) as usize;
+        expanded[dst_row..dst_row + (w as usize)]
+            .copy_from_slice(&alpha[src_row..src_row + (w as usize)]);
+    }
+
+    let mut dilated = vec![0u8; (out_w * out_h) as usize];
+    let r_i = r as i32;
+    let ow_i = out_w as i32;
+    let oh_i = out_h as i32;
+
+    // Max-filter dilation within a square neighborhood of radius r.
+    for y in 0..out_h as i32 {
+        for x in 0..out_w as i32 {
+            let mut max_a = 0u8;
+            let y0 = (y - r_i).max(0);
+            let y1 = (y + r_i).min(oh_i - 1);
+            let x0 = (x - r_i).max(0);
+            let x1 = (x + r_i).min(ow_i - 1);
+            for yy in y0..=y1 {
+                let row_off = (yy * ow_i) as usize;
+                for xx in x0..=x1 {
+                    let a = expanded[row_off + (xx as usize)];
+                    if a > max_a {
+                        max_a = a;
+                        if max_a == 255 {
+                            break;
+                        }
+                    }
+                }
+                if max_a == 255 {
+                    break;
+                }
+            }
+            dilated[(y as u32 * out_w + x as u32) as usize] = max_a;
+        }
+    }
+
+    (out_w, out_h, dilated)
+}
+
 fn parse_size(s: &str) -> anyhow::Result<(u32, u32)> {
     let (w_s, h_s) = s
         .split_once('x')
@@ -563,9 +748,16 @@ mod tests {
 
     #[test]
     fn dts_contains_expected_exports() {
-        let dts = render_font_dts_module();
+        let dts = render_font_dts_module(false);
         assert!(dts.contains("export interface FontAtlasMeta"));
         assert!(dts.contains("declare const font: FontAtlasMeta;"));
         assert!(dts.contains("export { font };"));
+    }
+
+    #[test]
+    fn dts_includes_outline_when_enabled() {
+        let dts = render_font_dts_module(true);
+        assert!(dts.contains("declare const outline: FontAtlasMeta;"));
+        assert!(dts.contains("export { outline };"));
     }
 }
