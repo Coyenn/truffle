@@ -1,5 +1,5 @@
 use crate::assets::{
-    FsImageMetadata, augment_assets, load_assets, render_dts_module, render_luau_module,
+    augment_assets, load_assets, render_dts_module, render_luau_module, FsImageMetadata,
 };
 use crate::commands::image::HighlightArgs;
 use anyhow::Context;
