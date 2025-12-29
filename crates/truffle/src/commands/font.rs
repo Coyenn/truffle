@@ -181,14 +181,17 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
             if let Some(ref mut outline_atlas) = outline_atlas {
                 let r = args.outline;
                 let (dw, dh, dilated) = dilate_alpha_with_border(&bitmap, gw, gh, r);
-                blit_alpha_white(
+                // Outline variant: black stroke (dilated alpha), white fill (original alpha).
+                blit_alpha_color(
                     outline_atlas,
                     draw_x.saturating_sub(r),
                     draw_y.saturating_sub(r),
                     dw,
                     dh,
                     &dilated,
+                    [0, 0, 0],
                 );
+                blit_alpha_white(outline_atlas, draw_x, draw_y, gw, gh, &bitmap);
             }
         }
 
@@ -630,6 +633,18 @@ fn fit_pixel_size(
 }
 
 fn blit_alpha_white(dst: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32, alpha: &[u8]) {
+    blit_alpha_color(dst, x0, y0, w, h, alpha, [255, 255, 255]);
+}
+
+fn blit_alpha_color(
+    dst: &mut image::RgbaImage,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+    alpha: &[u8],
+    rgb: [u8; 3],
+) {
     let dst_w = dst.width();
     let dst_h = dst.height();
 
@@ -646,7 +661,7 @@ fn blit_alpha_white(dst: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32
             }
             let existing = dst.get_pixel(dx, dy).0;
             let out_a = existing[3].max(a);
-            dst.put_pixel(dx, dy, image::Rgba([255, 255, 255, out_a]));
+            dst.put_pixel(dx, dy, image::Rgba([rgb[0], rgb[1], rgb[2], out_a]));
         }
     }
 }
