@@ -222,10 +222,17 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
 
                 if matches!(args.optical_kerning, OpticalKerningMode::Outline) {
                     // The dilated bitmap has a border of `r` pixels around the original glyph,
-                    // so its baseline-relative top is shifted by -r.
+                    // so its baseline-relative top is shifted by -r and xmin is shifted by -r.
                     ink_profiles.insert(
                         ch,
-                        ink_profile_from_alpha(&dilated, dw, dh, metrics.ymin - r as i32, 0),
+                        ink_profile_from_alpha(
+                            &dilated,
+                            dw,
+                            dh,
+                            metrics.ymin - r as i32,
+                            metrics.xmin - r as i32,
+                            0,
+                        ),
                     );
                 }
             }
@@ -234,7 +241,10 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         if matches!(args.optical_kerning, OpticalKerningMode::Fill)
             || (matches!(args.optical_kerning, OpticalKerningMode::Outline) && !outline_enabled)
         {
-            ink_profiles.insert(ch, ink_profile_from_alpha(&bitmap, gw, gh, metrics.ymin, 0));
+            ink_profiles.insert(
+                ch,
+                ink_profile_from_alpha(&bitmap, gw, gh, metrics.ymin, metrics.xmin, 0),
+            );
         }
 
         glyph_metas.push(GlyphMeta {
@@ -431,6 +441,8 @@ struct GlyphMeta {
 struct InkProfile {
     // Baseline-relative top y (inclusive) for row 0.
     ymin: i32,
+    // Left bearing offset: bitmap x=0 corresponds to font x=xmin.
+    xmin: i32,
     // For each row, left/right extents (inclusive) in glyph-local x coordinates.
     // None means the row has no ink.
     rows: Vec<Option<(u32, u32)>>,
@@ -444,12 +456,20 @@ struct KerningPair {
     kern: f32,
 }
 
-fn ink_profile_from_alpha(alpha: &[u8], w: u32, h: u32, ymin: i32, threshold: u8) -> InkProfile {
+fn ink_profile_from_alpha(
+    alpha: &[u8],
+    w: u32,
+    h: u32,
+    ymin: i32,
+    xmin: i32,
+    threshold: u8,
+) -> InkProfile {
     let mut rows = Vec::with_capacity(h as usize);
     if w == 0 || h == 0 {
-        return InkProfile { ymin, rows };
+        return InkProfile { ymin, xmin, rows };
     }
-    for y in 0..h {
+    // Iterate from bottom (h-1) to top (0) so that rows[0] corresponds to ymin (bottom).
+    for y in (0..h).rev() {
         let mut left: Option<u32> = None;
         let mut right: Option<u32> = None;
         let row_off = (y * w) as usize;
@@ -462,7 +482,7 @@ fn ink_profile_from_alpha(alpha: &[u8], w: u32, h: u32, ymin: i32, threshold: u8
         }
         rows.push(left.zip(right));
     }
-    InkProfile { ymin, rows }
+    InkProfile { ymin, xmin, rows }
 }
 
 fn compute_optical_kerning_pairs(
@@ -507,6 +527,7 @@ fn compute_optical_kerning_pairs(
 
             // Compute the minimum ink gap (in px) between the right edge of left glyph and
             // the left edge of right glyph when right glyph is placed at x = advance(left).
+            // Account for xmin offsets: bitmap x=0 corresponds to font x=xmin.
             let mut min_gap: Option<f32> = None;
             for by in y0..y1 {
                 let li = (by - lp.ymin) as usize;
@@ -517,7 +538,11 @@ fn compute_optical_kerning_pairs(
                 let Some((r_left, _r_right)) = rp.rows.get(ri).and_then(|v| *v) else {
                     continue;
                 };
-                let gap = la + (r_left as f32) - ((l_right + 1) as f32);
+                // Convert bitmap-local coordinates to font coordinates using xmin offsets.
+                // Right edge of left glyph in font coords: lp.xmin + l_right + 1
+                // Left edge of right glyph in font coords: la + rp.xmin + r_left
+                let gap =
+                    la + (rp.xmin as f32 + r_left as f32) - (lp.xmin as f32 + l_right as f32 + 1.0);
                 min_gap = Some(min_gap.map_or(gap, |g| g.min(gap)));
             }
             let Some(min_gap) = min_gap else {
@@ -527,15 +552,11 @@ fn compute_optical_kerning_pairs(
             // If min_gap is bigger than target, tighten (negative kern).
             // If min_gap is smaller than target, loosen (positive kern).
             let delta = min_gap - target_gap;
-            let kern_px: f32 = if delta >= 0.0 {
-                // Tighten by up to floor(delta) pixels.
-                -(delta.floor())
-            } else {
-                // Loosen by at least ceil(-delta) pixels.
-                (-delta).ceil()
-            };
+            // Use the delta directly to preserve subpixel precision.
+            let kern_px: f32 = -delta;
 
-            if kern_px.abs() >= 1.0 {
+            // Filter out very small kerning adjustments to avoid noise.
+            if kern_px.abs() >= 0.01 {
                 out.push(KerningPair {
                     left,
                     right,
