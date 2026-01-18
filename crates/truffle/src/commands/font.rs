@@ -1200,8 +1200,8 @@ fn fit_pixel_size(
 ) -> anyhow::Result<f32> {
     let mut px = initial_px.max(1.0);
 
-    // Iterate a couple times to converge if needed.
-    for _ in 0..4 {
+    // Iterate a few times to converge if needed.
+    for _ in 0..10 {
         let mut max_w = 0u32;
         let mut max_h = 0u32;
         let mut min_ymin = i32::MAX;
@@ -1218,24 +1218,27 @@ fn fit_pixel_size(
             }
         }
 
-        let max_dim = max_w.max(max_h);
+        let height_span = if min_ymin == i32::MAX || max_ymax == i32::MIN {
+            0
+        } else {
+            (max_ymax - min_ymin) as u32
+        };
+        let max_dim = max_w.max(max_h).max(height_span);
         if max_dim == 0 {
             // Entire charset rasterizes to nothing; keep something valid.
             return Ok(px.max(1.0));
         }
 
-        let baseline_span_ok = if min_ymin == i32::MAX || max_ymax == i32::MIN {
-            true
-        } else {
-            (max_ymax - min_ymin) as u32 <= inner
-        };
-
-        if max_w <= inner && max_h <= inner && baseline_span_ok {
-            return Ok(px);
-        }
-
         let scale = (inner as f32) / (max_dim as f32);
-        let next_px = (px * scale).floor().max(1.0);
+        if (scale - 1.0).abs() < 0.001 {
+            return Ok(px.max(1.0));
+        }
+        let next_px = if scale > 1.0 {
+            (px * scale).ceil()
+        } else {
+            (px * scale).floor()
+        }
+        .max(1.0);
         if (next_px - px).abs() < f32::EPSILON {
             return Ok(px.max(1.0));
         }
