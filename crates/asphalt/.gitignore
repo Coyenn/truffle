@@ -1,9 +1,0 @@
-/target
-/test
-/input
-/output
-asphalt.lock.toml
-.env*
-asphalt.toml
-.DS_Store
-.asphalt-debug/
