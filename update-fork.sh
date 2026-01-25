@@ -15,5 +15,5 @@ if ! git remote get-url "${UPSTREAM_REMOTE}" >/dev/null 2>&1; then
   git remote add "${UPSTREAM_REMOTE}" "${UPSTREAM_URL}"
 fi
 
-git fetch "${UPSTREAM_REMOTE}" "${UPSTREAM_BRANCH}"
+git fetch --no-tags "${UPSTREAM_REMOTE}" "${UPSTREAM_BRANCH}"
 git subtree pull --prefix "${SUBTREE_PREFIX}" "${UPSTREAM_REMOTE}" "${UPSTREAM_BRANCH}" --squash
