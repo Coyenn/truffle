@@ -15,20 +15,23 @@ impl Project {
 
     pub fn write_config(&self, contents: toml::Table) {
         self.dir
-            .child("asphalt.toml")
+            .child("truffle.toml")
             .write_str(&contents.to_string())
             .unwrap();
     }
 
     pub fn write_lockfile(&self, contents: toml::Table) {
         self.dir
-            .child("asphalt.lock.toml")
+            .child("truffle.lock.toml")
             .write_str(&contents.to_string())
             .unwrap();
     }
 
     fn read_test_asset(&self, file_name: &str) -> Vec<u8> {
-        let path = Path::new("tests").join("assets").join(file_name);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("assets")
+            .join(file_name);
         fs::read(&path).unwrap()
     }
 

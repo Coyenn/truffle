@@ -2,8 +2,8 @@
 /test
 /input
 /output
-asphalt.lock.toml
+truffle.lock.toml
 .env*
-asphalt.toml
+truffle.toml
 .DS_Store
 .asphalt-debug/

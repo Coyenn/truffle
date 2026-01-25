@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const FILE_NAME: &str = "asphalt.lock.toml";
+pub const FILE_NAME: &str = "truffle.lock.toml";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Lockfile {

@@ -23,7 +23,7 @@ pub struct Config {
 
 pub type InputMap = HashMap<String, Input>;
 
-pub const FILE_NAME: &str = "asphalt.toml";
+pub const FILE_NAME: &str = "truffle.toml";
 
 impl Config {
     pub async fn read_from(project_dir: PathBuf) -> anyhow::Result<Config> {
@@ -32,7 +32,20 @@ impl Config {
             .await
             .context("Failed to read config file")?;
 
-        let mut config: Config = toml::from_str(&config_str)?;
+        // Parse as TOML value to strip the [truffle] table before deserializing
+        let mut toml_value: toml::Value =
+            toml::from_str(&config_str).context("Failed to parse config file")?;
+
+        // Remove the [truffle] table if it exists (for truffle.toml compatibility)
+        if let toml::Value::Table(ref mut table) = toml_value {
+            table.remove("truffle");
+        }
+
+        // Convert back to string and deserialize as Config
+        let cleaned_str =
+            toml::to_string(&toml_value).context("Failed to serialize cleaned config")?;
+        let mut config: Config =
+            toml::from_str(&cleaned_str).context("Failed to deserialize config")?;
         config.project_dir = project_dir;
 
         Ok(config)

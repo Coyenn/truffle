@@ -90,6 +90,7 @@ fn cloud_output_and_lockfile() {
         output_path = "output"
     });
     let test_file = project.add_file("test1.png");
+    let test_file_hash = hash(&test_file);
 
     project
         .run()
@@ -97,7 +98,9 @@ fn cloud_output_and_lockfile() {
         .assert()
         .success();
 
-    project.dir.child("asphalt.lock.toml").assert(toml_eq({
+    project.dir
+        .child("truffle.lock.toml")
+        .assert(toml_eq({
         let mut table = toml::Table::new();
         table.insert("version".into(), 2.into());
 
@@ -105,7 +108,7 @@ fn cloud_output_and_lockfile() {
             let mut inputs = toml::Table::new();
             inputs.insert("assets".into(), {
                 let mut assets = toml::Table::new();
-                assets.insert(hash(&test_file), {
+                assets.insert(test_file_hash, {
                     let mut entry = toml::Table::new();
                     entry.insert("asset_id".into(), 1337.into());
                     entry.into()
