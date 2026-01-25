@@ -81,11 +81,11 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
     let multi_progress = MultiProgress::new();
     let sync_args = AsphaltSyncArgs {
         api_key: Some(api_key),
-        target: SyncTarget::Cloud,
-        dry_run: false,
+        target: Some(SyncTarget::Cloud { dry_run: false }),
         expected_price: None,
+        project: PathBuf::from("."),
     };
-    sync(multi_progress, sync_args, config.asphalt.clone())
+    sync(sync_args, multi_progress)
         .await
         .context("Failed to sync assets with Asphalt")?;
 

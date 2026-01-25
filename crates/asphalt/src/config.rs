@@ -4,10 +4,10 @@ use clap::ValueEnum;
 use fs_err::tokio as fs;
 use relative_path::RelativePathBuf;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 
-#[derive(Debug, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct Config {
     pub creator: Creator,
 
@@ -53,7 +53,7 @@ impl Config {
 }
 
 /// Optional configuration for generated files and code
-#[derive(Debug, Deserialize, Clone, Default, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default, JsonSchema)]
 #[serde(default)]
 pub struct Codegen {
     pub style: CodegenStyle,
@@ -66,7 +66,7 @@ pub struct Codegen {
 }
 
 /// The type of Creator
-#[derive(Debug, Deserialize, Clone, ValueEnum, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, ValueEnum, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CreatorType {
     /// A personal Roblox account
@@ -76,7 +76,7 @@ pub enum CreatorType {
 }
 
 /// The Roblox creator to upload the assets under
-#[derive(Debug, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct Creator {
     /// The type of Creator
     #[serde(rename = "type")]
@@ -90,7 +90,7 @@ fn default_true() -> bool {
 }
 
 /// A collection of assets
-#[derive(Debug, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct Input {
     /// A glob pattern to match files to upload
     #[schemars(with = "String")]
@@ -110,14 +110,14 @@ pub struct Input {
 }
 
 /// An asset that exists on Roblox
-#[derive(Debug, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Clone, JsonSchema)]
 pub struct WebAsset {
     /// The asset ID
     pub id: u64,
 }
 
 /// The style of code to generate
-#[derive(Debug, Deserialize, Default, Clone, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CodegenStyle {
     #[default]

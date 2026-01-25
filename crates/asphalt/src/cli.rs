@@ -61,7 +61,7 @@ pub struct SyncArgs {
 
     /// Where Asphalt should sync assets to.
     #[command(subcommand)]
-    target: Option<SyncTarget>,
+    pub target: Option<SyncTarget>,
 
     /// Provides Roblox with the amount of Robux that you are willing to spend on each non-free asset upload.
     #[arg(long)]
