@@ -98,9 +98,7 @@ fn cloud_output_and_lockfile() {
         .assert()
         .success();
 
-    project.dir
-        .child("truffle.lock.toml")
-        .assert(toml_eq({
+    project.dir.child("truffle.lock.toml").assert(toml_eq({
         let mut table = toml::Table::new();
         table.insert("version".into(), 2.into());
 

@@ -63,6 +63,14 @@ enum EventState {
 
 pub async fn sync(args: SyncArgs, mp: MultiProgress) -> anyhow::Result<()> {
     let config = Config::read_from(args.project.clone()).await?;
+    sync_with_config(config, args, mp).await
+}
+
+pub async fn sync_with_config(
+    config: Config,
+    args: SyncArgs,
+    mp: MultiProgress,
+) -> anyhow::Result<()> {
     let target = args.target();
 
     let existing_lockfile = RawLockfile::read_from(&config.project_dir)

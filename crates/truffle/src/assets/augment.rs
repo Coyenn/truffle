@@ -68,7 +68,15 @@ fn augment_node(
                 id: id_str,
                 width: Some(width),
                 height: Some(height),
+                rect_x: None,
+                rect_y: None,
+                rect_w: None,
+                rect_h: None,
                 highlight_id: None,
+                highlight_rect_x: None,
+                highlight_rect_y: None,
+                highlight_rect_w: None,
+                highlight_rect_h: None,
             };
 
             if let Some(highlight_id) = get_highlight_asset_id(assets, path_segments) {

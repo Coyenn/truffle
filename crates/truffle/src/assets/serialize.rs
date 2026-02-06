@@ -21,7 +21,15 @@ pub fn render_dts_module(assets: &BTreeMap<String, AssetValue>) -> String {
          \tid: string;\n\
          \twidth: number;\n\
          \theight: number;\n\
+         \trectX?: number;\n\
+         \trectY?: number;\n\
+         \trectW?: number;\n\
+         \trectH?: number;\n\
          \thighlightId?: string;\n\
+         \thighlightRectX?: number;\n\
+         \thighlightRectY?: number;\n\
+         \thighlightRectW?: number;\n\
+         \thighlightRectH?: number;\n\
          }}\n\n\
          declare const assets: {}\n\n\
          export {{ assets }};\n",
@@ -46,8 +54,32 @@ fn serialize_luau(value: &AssetValue, indent: usize) -> String {
             if let Some(h) = meta.height {
                 parts.push(format!("{}height = {},", inner_indent, h));
             }
+            if let Some(x) = meta.rect_x {
+                parts.push(format!("{}rectX = {},", inner_indent, x));
+            }
+            if let Some(y) = meta.rect_y {
+                parts.push(format!("{}rectY = {},", inner_indent, y));
+            }
+            if let Some(w) = meta.rect_w {
+                parts.push(format!("{}rectW = {},", inner_indent, w));
+            }
+            if let Some(h) = meta.rect_h {
+                parts.push(format!("{}rectH = {},", inner_indent, h));
+            }
             if let Some(ref h_id) = meta.highlight_id {
                 parts.push(format!("{}highlightId = \"{}\",", inner_indent, h_id));
+            }
+            if let Some(x) = meta.highlight_rect_x {
+                parts.push(format!("{}highlightRectX = {},", inner_indent, x));
+            }
+            if let Some(y) = meta.highlight_rect_y {
+                parts.push(format!("{}highlightRectY = {},", inner_indent, y));
+            }
+            if let Some(w) = meta.highlight_rect_w {
+                parts.push(format!("{}highlightRectW = {},", inner_indent, w));
+            }
+            if let Some(h) = meta.highlight_rect_h {
+                parts.push(format!("{}highlightRectH = {},", inner_indent, h));
             }
             parts.push(format!("{}}}", indent_str));
             let result = parts.join("\n");
@@ -142,7 +174,15 @@ mod tests {
                 id: id.to_string(),
                 width: Some(1536),
                 height: Some(864),
+                rect_x: None,
+                rect_y: None,
+                rect_w: None,
+                rect_h: None,
                 highlight_id: None,
+                highlight_rect_x: None,
+                highlight_rect_y: None,
+                highlight_rect_w: None,
+                highlight_rect_h: None,
             })
         }
 

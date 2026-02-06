@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use asphalt::config::Config as AsphaltConfig;
 use fs_err::tokio as fs;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 pub const FILE_NAME: &str = "truffle.toml";
 
@@ -31,10 +32,30 @@ pub struct TruffleOptions {
     /// Force regenerate highlights even if they exist
     #[serde(default)]
     pub highlight_force: bool,
+
+    /// Pack UI images into 4k atlas textures before syncing
+    #[serde(default)]
+    pub atlas: bool,
+
+    /// Padding (in pixels) around each sprite in the atlas
+    #[serde(default = "default_atlas_padding")]
+    pub atlas_padding: u32,
+
+    /// Scratch directory for intermediate/generated files
+    #[serde(default = "default_scratch_dir")]
+    pub scratch_dir: PathBuf,
 }
 
 fn default_thickness() -> u32 {
     1
+}
+
+fn default_atlas_padding() -> u32 {
+    4
+}
+
+fn default_scratch_dir() -> PathBuf {
+    PathBuf::from(".truffle")
 }
 
 impl TruffleConfig {

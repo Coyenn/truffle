@@ -15,4 +15,4 @@ pub mod web_api;
 
 pub use cli::{SyncArgs, SyncTarget};
 pub use config::Config;
-pub use sync::sync;
+pub use sync::{sync, sync_with_config};

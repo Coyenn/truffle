@@ -38,18 +38,82 @@ fn parse_luau_assets_module(content: &str) -> Result<BTreeMap<String, AssetValue
         return convert_table_to_asset_value(table);
     }
 
+    if let Some(table) = find_direct_return_table(block) {
+        return convert_table_to_asset_value(table);
+    }
+
     Err("Could not find assets table in Luau file".to_string())
 }
 
+fn find_direct_return_table(block: &ast::Block) -> Option<&ast::TableConstructor> {
+    match block.last_stmt()? {
+        ast::LastStmt::Return(ret) => {
+            for expr in ret.returns().iter() {
+                match expr {
+                    ast::Expression::TableConstructor(table) => {
+                        if looks_like_asset_table(table) {
+                            return Some(table);
+                        }
+                    }
+                    ast::Expression::Var(var) => {
+                        if let Some(table) = resolve_local_table(block, var) {
+                            if looks_like_asset_table(table) {
+                                return Some(table);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn looks_like_asset_table(table: &ast::TableConstructor) -> bool {
+    // Asphalt-generated Luau returns a table whose keys are file names.
+    // We only accept this format if it contains at least one key that looks like an asset file.
+    const EXTENSIONS: [&str; 5] = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
+
+    for field in table.fields() {
+        let key = match field {
+            ast::Field::NameKey { key, .. } => Some(key.to_string().trim().to_string()),
+            ast::Field::ExpressionKey { key, .. } => match key {
+                ast::Expression::String(_) => extract_string_value(key).ok(),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        let Some(key) = key else {
+            continue;
+        };
+
+        if key.contains('/') || EXTENSIONS.iter().any(|ext| key.ends_with(ext)) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn find_local_assets_table(block: &ast::Block) -> Option<&ast::TableConstructor> {
+    find_local_table_named(block, "assets")
+}
+
+fn find_local_table_named<'a>(
+    block: &'a ast::Block,
+    name: &str,
+) -> Option<&'a ast::TableConstructor> {
     for stmt in block.stmts() {
         if let ast::Stmt::LocalAssignment(local_assign) = stmt {
-            for (name, expr) in local_assign
+            for (n, expr) in local_assign
                 .names()
                 .iter()
                 .zip(local_assign.expressions().iter())
             {
-                if name.to_string().trim() == "assets" {
+                if n.to_string().trim() == name {
                     if let ast::Expression::TableConstructor(table) = expr {
                         return Some(table);
                     }
@@ -110,6 +174,17 @@ fn resolve_assets_var<'a>(
         if name_ref.to_string().trim() == "assets" {
             return find_local_assets_table(block);
         }
+    }
+    None
+}
+
+fn resolve_local_table<'a>(
+    block: &'a ast::Block,
+    var: &'a ast::Var,
+) -> Option<&'a ast::TableConstructor> {
+    if let ast::Var::Name(name_ref) = var {
+        let name = name_ref.to_string();
+        return find_local_table_named(block, name.trim());
     }
     None
 }
