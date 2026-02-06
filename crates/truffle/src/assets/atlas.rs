@@ -1,20 +1,44 @@
 use super::model::{AssetMeta, AssetValue};
 use anyhow::{Context, Result};
+use asphalt::glob::Glob;
 use image::{GenericImageView, ImageBuffer, Rgba};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const MAX_ATLAS_SIZE: u32 = 4096;
+const MIN_ATLAS_SIZE: u32 = 256;
 
 #[derive(Debug, Clone)]
 pub struct AtlasOptions {
     pub padding: u32,
+    pub size: u32,
+    pub exclude: AtlasExclude,
 }
 
 impl Default for AtlasOptions {
     fn default() -> Self {
-        Self { padding: 4 }
+        Self {
+            padding: 4,
+            size: 1024,
+            exclude: AtlasExclude::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AtlasExclude {
+    pub exact: HashSet<String>,
+    pub globs: Vec<Glob>,
+}
+
+impl AtlasExclude {
+    pub fn is_match(&self, key: &str) -> bool {
+        if self.exact.contains(key) {
+            return true;
+        }
+
+        self.globs.iter().any(|glob| glob.is_match(key))
     }
 }
 
@@ -53,6 +77,7 @@ pub fn build_atlases(
     output_dir: &Path,
     options: AtlasOptions,
 ) -> Result<BTreeMap<String, SpritePlacement>> {
+    let atlas_size = validate_atlas_size(options.size)?;
     if output_dir.exists() {
         std::fs::remove_dir_all(output_dir).with_context(|| {
             format!("failed to clean atlas output dir: {}", output_dir.display())
@@ -65,10 +90,10 @@ pub fn build_atlases(
         )
     })?;
 
-    let sprites = scan_pngs(images_folder)?;
-    let placed = pack_sprites(&sprites, options.padding)?;
+    let sprites = scan_pngs(images_folder, &options.exclude)?;
+    let placed = pack_sprites(&sprites, options.padding, atlas_size)?;
 
-    write_atlas_images(&placed, output_dir, options.padding)?;
+    write_atlas_images(&placed, output_dir, options.padding, atlas_size)?;
 
     let mut placements = BTreeMap::new();
     for sprite in placed {
@@ -129,7 +154,7 @@ pub fn build_atlased_assets(
     Ok(root)
 }
 
-fn scan_pngs(images_folder: &Path) -> Result<Vec<PendingSprite>> {
+fn scan_pngs(images_folder: &Path, exclude: &AtlasExclude) -> Result<Vec<PendingSprite>> {
     let mut sprites = Vec::new();
     for entry in WalkDir::new(images_folder)
         .follow_links(false)
@@ -155,6 +180,10 @@ fn scan_pngs(images_folder: &Path) -> Result<Vec<PendingSprite>> {
             .collect::<Vec<_>>()
             .join("/");
 
+        if exclude.is_match(&key) {
+            continue;
+        }
+
         let img = image::open(path)
             .with_context(|| format!("failed to decode png: {}", path.display()))?;
         let (w, h) = img.dimensions();
@@ -176,7 +205,7 @@ fn scan_pngs(images_folder: &Path) -> Result<Vec<PendingSprite>> {
     Ok(sprites)
 }
 
-fn pack_sprites(sprites: &[PendingSprite], padding: u32) -> Result<Vec<PlacedSprite>> {
+fn pack_sprites(sprites: &[PendingSprite], padding: u32, atlas_size: u32) -> Result<Vec<PlacedSprite>> {
     let mut atlas_index: usize = 0;
     let mut cursor_x: u32 = 0;
     let mut cursor_y: u32 = 0;
@@ -188,24 +217,24 @@ fn pack_sprites(sprites: &[PendingSprite], padding: u32) -> Result<Vec<PlacedSpr
         let alloc_w = s.w + padding.saturating_mul(2);
         let alloc_h = s.h + padding.saturating_mul(2);
 
-        if alloc_w > MAX_ATLAS_SIZE || alloc_h > MAX_ATLAS_SIZE {
+        if alloc_w > atlas_size || alloc_h > atlas_size {
             anyhow::bail!(
                 "{} is too large to pack into a {}x{} atlas ({}x{})",
                 s.key,
-                MAX_ATLAS_SIZE,
-                MAX_ATLAS_SIZE,
+                atlas_size,
+                atlas_size,
                 s.w,
                 s.h
             );
         }
 
-        if cursor_x.saturating_add(alloc_w) > MAX_ATLAS_SIZE {
+        if cursor_x.saturating_add(alloc_w) > atlas_size {
             cursor_x = 0;
             cursor_y = cursor_y.saturating_add(row_h);
             row_h = 0;
         }
 
-        if cursor_y.saturating_add(alloc_h) > MAX_ATLAS_SIZE {
+        if cursor_y.saturating_add(alloc_h) > atlas_size {
             atlas_index += 1;
             cursor_x = 0;
             cursor_y = 0;
@@ -233,7 +262,12 @@ fn pack_sprites(sprites: &[PendingSprite], padding: u32) -> Result<Vec<PlacedSpr
     Ok(placed)
 }
 
-fn write_atlas_images(placed: &[PlacedSprite], output_dir: &Path, padding: u32) -> Result<()> {
+fn write_atlas_images(
+    placed: &[PlacedSprite],
+    output_dir: &Path,
+    padding: u32,
+    atlas_size: u32,
+) -> Result<()> {
     let mut per_atlas: HashMap<usize, Vec<&PlacedSprite>> = HashMap::new();
     for s in placed {
         per_atlas.entry(s.atlas_index).or_default().push(s);
@@ -245,7 +279,7 @@ fn write_atlas_images(placed: &[PlacedSprite], output_dir: &Path, padding: u32) 
     for atlas_index in atlas_indices {
         let sprites = per_atlas.get(&atlas_index).unwrap();
         let mut atlas: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_pixel(MAX_ATLAS_SIZE, MAX_ATLAS_SIZE, Rgba([0, 0, 0, 0]));
+            ImageBuffer::from_pixel(atlas_size, atlas_size, Rgba([0, 0, 0, 0]));
 
         for s in sprites {
             let img = image::open(&s.src_path)
@@ -268,22 +302,16 @@ fn blit_with_extrude(
     src: &ImageBuffer<Rgba<u8>, Vec<u8>>,
     inner_x: u32,
     inner_y: u32,
-    padding: u32,
+    _padding: u32,
 ) {
     let w = src.width();
     let h = src.height();
-    let start_x = inner_x.saturating_sub(padding);
-    let start_y = inner_y.saturating_sub(padding);
-    let out_w = w + padding.saturating_mul(2);
-    let out_h = h + padding.saturating_mul(2);
 
-    for dy in 0..out_h {
-        for dx in 0..out_w {
-            let sx = dx.saturating_sub(padding).min(w.saturating_sub(1));
-            let sy = dy.saturating_sub(padding).min(h.saturating_sub(1));
-            let p = src.get_pixel(sx, sy);
-            let tx = start_x + dx;
-            let ty = start_y + dy;
+    for dy in 0..h {
+        for dx in 0..w {
+            let p = src.get_pixel(dx, dy);
+            let tx = inner_x + dx;
+            let ty = inner_y + dy;
             if tx < dst.width() && ty < dst.height() {
                 dst.put_pixel(tx, ty, *p);
             }
@@ -293,6 +321,22 @@ fn blit_with_extrude(
 
 fn atlas_file_name(atlas_index: usize) -> String {
     format!("atlas_{:03}.png", atlas_index)
+}
+
+fn validate_atlas_size(size: u32) -> Result<u32> {
+    if size < MIN_ATLAS_SIZE || size > MAX_ATLAS_SIZE {
+        anyhow::bail!(
+            "atlas size must be between {} and {}",
+            MIN_ATLAS_SIZE,
+            MAX_ATLAS_SIZE
+        );
+    }
+
+    if !size.is_power_of_two() {
+        anyhow::bail!("atlas size must be a power of two");
+    }
+
+    Ok(size)
 }
 
 fn split_key(key: &str) -> Vec<String> {

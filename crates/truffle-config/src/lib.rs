@@ -33,13 +33,21 @@ pub struct TruffleOptions {
     #[serde(default)]
     pub highlight_force: bool,
 
-    /// Pack UI images into 4k atlas textures before syncing
+    /// Pack UI images into atlas textures before syncing
     #[serde(default)]
     pub atlas: bool,
+
+    /// Atlas texture size (must be a power of two)
+    #[serde(default = "default_atlas_size")]
+    pub atlas_size: u32,
 
     /// Padding (in pixels) around each sprite in the atlas
     #[serde(default = "default_atlas_padding")]
     pub atlas_padding: u32,
+
+    /// Atlas image keys to exclude from packing
+    #[serde(default)]
+    pub atlas_exclude: Vec<String>,
 
     /// Scratch directory for intermediate/generated files
     #[serde(default = "default_scratch_dir")]
@@ -52,6 +60,10 @@ fn default_thickness() -> u32 {
 
 fn default_atlas_padding() -> u32 {
     4
+}
+
+fn default_atlas_size() -> u32 {
+    1024
 }
 
 fn default_scratch_dir() -> PathBuf {

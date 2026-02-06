@@ -1,6 +1,6 @@
 use crate::assets::{
     augment_assets, build_atlased_assets, build_atlases, load_assets, render_dts_module,
-    render_luau_module, AtlasOptions, FsImageMetadata,
+    render_luau_module, AtlasExclude, AtlasOptions, FsImageMetadata,
 };
 use crate::commands::image::HighlightArgs;
 use anyhow::Context;
@@ -12,7 +12,7 @@ use asphalt::{
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
@@ -37,13 +37,21 @@ pub struct SyncArgs {
     #[arg(long, default_value = "assets/images")]
     pub images_folder: PathBuf,
 
-    /// Pack images into 4k atlas textures before syncing
+    /// Pack images into atlas textures before syncing
     #[arg(long)]
     pub atlas: bool,
+
+    /// Atlas texture size (power-of-two square)
+    #[arg(long)]
+    pub atlas_size: Option<u32>,
 
     /// Padding (in pixels) around each sprite in the atlas
     #[arg(long)]
     pub atlas_padding: Option<u32>,
+
+    /// Image keys to exclude from atlas packing (repeatable)
+    #[arg(long)]
+    pub atlas_exclude: Vec<String>,
 
     /// Write outputs without syncing to Roblox
     #[arg(long)]
@@ -106,17 +114,32 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         // Asphalt codegen writes `{input_name}.luau`. Our atlas input is named `atlases`.
         let atlas_assets_output = atlas_codegen_dir.join("atlases.luau");
         let atlas_padding = args.atlas_padding.unwrap_or(config.truffle.atlas_padding);
+        let atlas_size = args.atlas_size.unwrap_or(config.truffle.atlas_size);
+        let atlas_exclude = resolve_atlas_exclude(
+            &args.atlas_exclude,
+            &config.truffle.atlas_exclude,
+            &args.images_folder,
+        );
+        let atlas_exclude_matcher = build_atlas_exclude(&atlas_exclude)?;
 
         let placements = build_atlases(
             &args.images_folder,
             &atlas_dir,
             AtlasOptions {
                 padding: atlas_padding,
+                size: atlas_size,
+                exclude: atlas_exclude_matcher.clone(),
             },
         )
         .context("Failed to build atlases")?;
 
         std::fs::create_dir_all(&atlas_codegen_dir).ok();
+
+        let excluded_assets_output = if atlas_exclude.is_empty() {
+            None
+        } else {
+            Some(atlas_codegen_dir.join("excluded.luau"))
+        };
 
         if !args.dry_run {
             // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
@@ -142,6 +165,27 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
                         web: HashMap::new(),
                     },
                 );
+
+                if let Some(excluded_assets_output) = &excluded_assets_output {
+                    if let Some(exclude_glob) =
+                        build_exclude_glob(&args.images_folder, &atlas_exclude)
+                    {
+                        inputs.insert(
+                            "excluded".to_string(),
+                            AsphaltInput {
+                                include: Glob::new(exclude_glob.as_str())
+                                    .context("Invalid atlas exclude glob")?,
+                                output_path: excluded_assets_output
+                                    .parent()
+                                    .map(PathBuf::from)
+                                    .unwrap_or_else(|| atlas_codegen_dir.clone()),
+                                bleed: false,
+                                web: HashMap::new(),
+                            },
+                        );
+                    }
+                }
+
                 inputs
             };
 
@@ -180,8 +224,23 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         }
 
         // Build the final assets tree keyed by original image paths
-        let final_assets = build_atlased_assets(&placements, &atlas_ids)
+        let mut final_assets = build_atlased_assets(&placements, &atlas_ids)
             .context("Failed to build atlased asset metadata")?;
+
+        if !atlas_exclude.is_empty() {
+            let excluded_assets = match excluded_assets_output.as_ref() {
+                Some(path) if path.exists() => load_assets(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load excluded assets: {}", e))?,
+                _ => load_assets(&args.assets_input)
+                    .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?,
+            };
+
+            let filtered_excluded =
+                filter_assets_by_exclude(&excluded_assets, &atlas_exclude_matcher);
+            let augmented_excluded =
+                augment_assets(&filtered_excluded, &args.images_folder, &FsImageMetadata);
+            merge_asset_values(&mut final_assets, &augmented_excluded);
+        }
 
         println!("[sync] Writing augmented Luau module …");
         fs::write(&args.assets_output, render_luau_module(&final_assets))
@@ -313,4 +372,201 @@ fn resolve_api_key(provided: Option<String>) -> anyhow::Result<String> {
     }
 
     anyhow::bail!("TRUFFLE_API_KEY environment variable is not set. Not syncing assets.")
+}
+
+fn resolve_atlas_exclude(
+    cli: &[String],
+    config: &[String],
+    images_folder: &PathBuf,
+) -> Vec<String> {
+    let raw = if !cli.is_empty() { cli } else { config };
+    let mut out: Vec<String> = raw
+        .iter()
+        .map(|item| normalize_atlas_key(item, images_folder))
+        .collect();
+    out.retain(|item| !item.is_empty());
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> String {
+    let mut key = value.replace('\\', "/");
+    while let Some(stripped) = key.strip_prefix("./") {
+        key = stripped.to_string();
+    }
+    while let Some(stripped) = key.strip_prefix('/') {
+        key = stripped.to_string();
+    }
+
+    let images_folder = images_folder.to_string_lossy().replace('\\', "/");
+    let images_folder = images_folder.trim_end_matches('/').to_string();
+    if !images_folder.is_empty() {
+        let with_sep = format!("{}/", images_folder);
+        if key.starts_with(&with_sep) {
+            key = key[with_sep.len()..].to_string();
+        } else if key == images_folder {
+            key.clear();
+        }
+    }
+
+    key
+}
+
+fn build_exclude_glob(images_folder: &PathBuf, keys: &[String]) -> Option<String> {
+    let mut patterns = Vec::new();
+    for key in keys {
+        let pattern = normalize_exclude_pattern(key).pattern;
+        let pattern = images_folder
+            .join(pattern)
+            .to_string_lossy()
+            .replace('\\', "/");
+        patterns.push(pattern);
+    }
+
+    if patterns.is_empty() {
+        return None;
+    }
+
+    patterns.sort();
+    patterns.dedup();
+
+    if patterns.len() == 1 {
+        return Some(patterns[0].clone());
+    }
+
+    Some(format!("{{{}}}", patterns.join(",")))
+}
+
+fn build_atlas_exclude(keys: &[String]) -> anyhow::Result<AtlasExclude> {
+    let mut exact = HashSet::new();
+    let mut globs = Vec::new();
+
+    for raw in keys {
+        let normalized = raw.trim().to_string();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let pattern = normalize_exclude_pattern(&normalized);
+        if pattern.is_glob {
+            globs.push(
+                Glob::new(pattern.pattern.as_str())
+                    .with_context(|| format!("Invalid atlas exclude glob: {}", pattern.pattern))?,
+            );
+        } else {
+            exact.insert(pattern.pattern);
+        }
+    }
+
+    Ok(AtlasExclude { exact, globs })
+}
+
+fn normalize_exclude_pattern(value: &str) -> ExcludePattern {
+    let trimmed = value.trim_matches('/');
+    let mut pattern = trimmed.to_string();
+
+    if pattern.ends_with('/') {
+        pattern = format!("{}**/*.png", pattern);
+    } else if !pattern.contains('.') && !pattern.contains('/') {
+        pattern = format!("{}/**/*.png", pattern);
+    } else if !pattern.contains('.') && pattern.contains('/') {
+        pattern = format!("{}/**/*.png", pattern);
+    }
+
+    let is_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
+
+    ExcludePattern { pattern, is_glob }
+}
+
+struct ExcludePattern {
+    pattern: String,
+    is_glob: bool,
+}
+
+fn merge_asset_values(
+    dest: &mut BTreeMap<String, crate::assets::model::AssetValue>,
+    src: &BTreeMap<String, crate::assets::model::AssetValue>,
+) {
+    use crate::assets::model::AssetValue;
+
+    for (key, value) in src {
+        match (dest.get_mut(key), value) {
+            (Some(AssetValue::Table(dest_table)), AssetValue::Table(src_table)) => {
+                merge_asset_values(dest_table, src_table);
+            }
+            _ => {
+                dest.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn filter_assets_by_exclude(
+    assets: &BTreeMap<String, crate::assets::model::AssetValue>,
+    exclude: &AtlasExclude,
+) -> BTreeMap<String, crate::assets::model::AssetValue> {
+    let mut out = BTreeMap::new();
+    let mut path = Vec::new();
+    walk_asset_values(assets, exclude, &mut path, &mut out);
+    out
+}
+
+fn walk_asset_values(
+    assets: &BTreeMap<String, crate::assets::model::AssetValue>,
+    exclude: &AtlasExclude,
+    path: &mut Vec<String>,
+    out: &mut BTreeMap<String, crate::assets::model::AssetValue>,
+) {
+    use crate::assets::model::AssetValue;
+
+    for (key, value) in assets {
+        path.push(key.clone());
+        match value {
+            AssetValue::Table(map) => {
+                walk_asset_values(map, exclude, path, out);
+            }
+            _ => {
+                if key.ends_with(".png") {
+                    let joined = path.join("/");
+                    if exclude.is_match(&joined) {
+                        insert_asset_value(out, path, value.clone());
+                    }
+                }
+            }
+        }
+        path.pop();
+    }
+}
+
+fn insert_asset_value(
+    root: &mut BTreeMap<String, crate::assets::model::AssetValue>,
+    path: &[String],
+    value: crate::assets::model::AssetValue,
+) {
+    use crate::assets::model::AssetValue;
+
+    if path.is_empty() {
+        return;
+    }
+
+    if path.len() == 1 {
+        root.insert(path[0].clone(), value);
+        return;
+    }
+
+    let head = path[0].clone();
+    let entry = root
+        .entry(head)
+        .or_insert_with(|| AssetValue::Table(BTreeMap::new()));
+
+    if !matches!(entry, AssetValue::Table(_)) {
+        *entry = AssetValue::Table(BTreeMap::new());
+    }
+
+    let AssetValue::Table(map) = entry else {
+        return;
+    };
+
+    insert_asset_value(map, &path[1..], value);
 }
