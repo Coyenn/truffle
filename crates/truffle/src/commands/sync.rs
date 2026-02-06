@@ -135,12 +135,6 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
 
         std::fs::create_dir_all(&atlas_codegen_dir).ok();
 
-        let excluded_assets_output = if atlas_exclude.is_empty() {
-            None
-        } else {
-            Some(atlas_codegen_dir.join("excluded.luau"))
-        };
-
         if !args.dry_run {
             // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
             let api_key = resolve_api_key(args.api_key.clone())?;
@@ -166,24 +160,33 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
                     },
                 );
 
-                if let Some(excluded_assets_output) = &excluded_assets_output {
-                    if let Some(exclude_glob) =
+                let exclude_glob = if atlas_exclude.is_empty() {
+                    None
+                } else {
+                    Some(
                         build_exclude_glob(&args.images_folder, &atlas_exclude)
-                    {
-                        inputs.insert(
-                            "excluded".to_string(),
-                            AsphaltInput {
-                                include: Glob::new(exclude_glob.as_str())
-                                    .context("Invalid atlas exclude glob")?,
-                                output_path: excluded_assets_output
-                                    .parent()
-                                    .map(PathBuf::from)
-                                    .unwrap_or_else(|| atlas_codegen_dir.clone()),
-                                bleed: false,
-                                web: HashMap::new(),
-                            },
-                        );
+                            .context("Atlas exclude list was empty after normalization")?,
+                    )
+                };
+
+                let mut found_images_input = false;
+                for (name, input) in asphalt_config.inputs.iter() {
+                    if is_images_input(&args.images_folder, &input.include.get_prefix()) {
+                        found_images_input = true;
+                        if let Some(exclude_glob) = &exclude_glob {
+                            let mut updated = input.clone();
+                            updated.include = Glob::new(exclude_glob.as_str())
+                                .context("Invalid atlas exclude glob")?;
+                            inputs.insert(name.clone(), updated);
+                        }
+                        continue;
                     }
+
+                    inputs.insert(name.clone(), input.clone());
+                }
+
+                if !atlas_exclude.is_empty() && !found_images_input {
+                    anyhow::bail!("Failed to find images input matching images_folder");
                 }
 
                 inputs
@@ -228,13 +231,8 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
             .context("Failed to build atlased asset metadata")?;
 
         if !atlas_exclude.is_empty() {
-            let excluded_assets = match excluded_assets_output.as_ref() {
-                Some(path) if path.exists() => load_assets(path)
-                    .map_err(|e| anyhow::anyhow!("Failed to load excluded assets: {}", e))?,
-                _ => load_assets(&args.assets_input)
-                    .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?,
-            };
-
+            let excluded_assets = load_assets(&args.assets_input)
+                .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?;
             let filtered_excluded =
                 filter_assets_by_exclude(&excluded_assets, &atlas_exclude_matcher);
             let augmented_excluded =
@@ -382,7 +380,7 @@ fn resolve_atlas_exclude(
     let raw = if !cli.is_empty() { cli } else { config };
     let mut out: Vec<String> = raw
         .iter()
-        .map(|item| normalize_atlas_key(item, images_folder))
+        .filter_map(|item| normalize_atlas_key(item, images_folder))
         .collect();
     out.retain(|item| !item.is_empty());
     out.sort();
@@ -390,7 +388,7 @@ fn resolve_atlas_exclude(
     out
 }
 
-fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> String {
+fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> Option<String> {
     let mut key = value.replace('\\', "/");
     while let Some(stripped) = key.strip_prefix("./") {
         key = stripped.to_string();
@@ -399,29 +397,32 @@ fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> String {
         key = stripped.to_string();
     }
 
-    let images_folder = images_folder.to_string_lossy().replace('\\', "/");
-    let images_folder = images_folder.trim_end_matches('/').to_string();
+    let images_folder = normalize_path_for_compare(images_folder);
     if !images_folder.is_empty() {
         let with_sep = format!("{}/", images_folder);
         if key.starts_with(&with_sep) {
             key = key[with_sep.len()..].to_string();
         } else if key == images_folder {
-            key.clear();
+            return None;
+        } else if let Some(images_root) = images_folder.split('/').next() {
+            let root_prefix = format!("{}/", images_root);
+            if key.starts_with(&root_prefix) {
+                return None;
+            }
         }
     }
 
-    key
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
 }
 
 fn build_exclude_glob(images_folder: &PathBuf, keys: &[String]) -> Option<String> {
     let mut patterns = Vec::new();
     for key in keys {
-        let pattern = normalize_exclude_pattern(key).pattern;
-        let pattern = images_folder
-            .join(pattern)
-            .to_string_lossy()
-            .replace('\\', "/");
-        patterns.push(pattern);
+        patterns.extend(build_exclude_patterns(key));
     }
 
     if patterns.is_empty() {
@@ -431,11 +432,97 @@ fn build_exclude_glob(images_folder: &PathBuf, keys: &[String]) -> Option<String
     patterns.sort();
     patterns.dedup();
 
-    if patterns.len() == 1 {
-        return Some(patterns[0].clone());
+    let images_folder = normalize_path_for_compare(images_folder);
+    if images_folder.is_empty() {
+        if patterns.len() == 1 {
+            return Some(patterns[0].clone());
+        }
+        return Some(format!("{{{}}}", patterns.join(",")));
     }
 
-    Some(format!("{{{}}}", patterns.join(",")))
+    if patterns.len() == 1 {
+        return Some(format!("{images_folder}/{}", patterns[0]));
+    }
+
+    Some(format!("{images_folder}/{{{}}}", patterns.join(",")))
+}
+
+fn build_exclude_patterns(value: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let raw = value.trim().trim_matches('/').to_string();
+    if raw.is_empty() {
+        return patterns;
+    }
+
+    let has_glob = raw
+        .chars()
+        .any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
+    let is_file = raw.to_ascii_lowercase().contains(".png");
+
+    let file_pattern = if !has_glob && !is_file {
+        format!("{}/**", raw)
+    } else {
+        raw.clone()
+    };
+    patterns.push(file_pattern);
+
+    let prefix = glob_prefix(&raw);
+    let prefix = prefix.trim_end_matches('/');
+    let dir = if is_file || prefix.to_ascii_lowercase().ends_with(".png") {
+        prefix
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string())
+    } else if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix.to_string())
+    };
+
+    if let Some(dir) = dir {
+        patterns.extend(path_ancestors(&dir));
+    }
+
+    patterns
+}
+
+fn glob_prefix(value: &str) -> &str {
+    match value.find(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']')) {
+        Some(index) => &value[..index],
+        None => value,
+    }
+}
+
+fn path_ancestors(path: &str) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut current = String::new();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        if current.is_empty() {
+            current = segment.to_string();
+        } else {
+            current.push('/');
+            current.push_str(segment);
+        }
+        ancestors.push(current.clone());
+    }
+    ancestors
+}
+
+fn is_images_input(images_folder: &PathBuf, input_prefix: &PathBuf) -> bool {
+    normalize_path_for_compare(images_folder) == normalize_path_for_compare(input_prefix)
+}
+
+fn normalize_path_for_compare(path: &PathBuf) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    while let Some(stripped) = value.strip_prefix("./") {
+        value = stripped.to_string();
+    }
+    while let Some(stripped) = value.strip_prefix('/') {
+        value = stripped.to_string();
+    }
+    while let Some(stripped) = value.strip_suffix('/') {
+        value = stripped.to_string();
+    }
+    value
 }
 
 fn build_atlas_exclude(keys: &[String]) -> anyhow::Result<AtlasExclude> {
@@ -465,16 +552,23 @@ fn build_atlas_exclude(keys: &[String]) -> anyhow::Result<AtlasExclude> {
 fn normalize_exclude_pattern(value: &str) -> ExcludePattern {
     let trimmed = value.trim_matches('/');
     let mut pattern = trimmed.to_string();
+    let has_glob = pattern
+        .chars()
+        .any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
 
-    if pattern.ends_with('/') {
-        pattern = format!("{}**/*.png", pattern);
-    } else if !pattern.contains('.') && !pattern.contains('/') {
-        pattern = format!("{}/**/*.png", pattern);
-    } else if !pattern.contains('.') && pattern.contains('/') {
-        pattern = format!("{}/**/*.png", pattern);
+    if !has_glob {
+        if pattern.ends_with('/') {
+            pattern = format!("{}**/*.png", pattern);
+        } else if !pattern.contains('.') && !pattern.contains('/') {
+            pattern = format!("{}/**/*.png", pattern);
+        } else if !pattern.contains('.') && pattern.contains('/') {
+            pattern = format!("{}/**/*.png", pattern);
+        }
     }
 
-    let is_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
+    let is_glob = pattern
+        .chars()
+        .any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
 
     ExcludePattern { pattern, is_glob }
 }
