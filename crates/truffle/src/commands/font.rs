@@ -71,6 +71,10 @@ pub struct FontArgs {
     /// Target minimum pixel gap between adjacent glyph ink when computing optical kerning.
     #[arg(long, default_value = "1", value_name = "PX")]
     pub optical_kerning_gap: u32,
+
+    /// Disable anti-aliasing by converting rasterized glyph alpha to hard 0/255.
+    #[arg(long, default_value_t = false)]
+    pub no_antialias: bool,
 }
 
 pub fn run(args: FontArgs) -> bool {
@@ -183,7 +187,10 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     // Optional: per-glyph ink profiles used for optical kerning computation.
     let mut ink_profiles: HashMap<char, InkProfile> = HashMap::new();
 
-    for (i, (ch, metrics, bitmap)) in rasterized.into_iter().enumerate() {
+    for (i, (ch, metrics, mut bitmap)) in rasterized.into_iter().enumerate() {
+        if args.no_antialias {
+            binarize_alpha(&mut bitmap);
+        }
         // Some glyphs may rasterize to empty; keep cell empty.
         let col = (i as u32) % cols;
         let row = (i as u32) / cols;
@@ -1334,6 +1341,12 @@ fn dilate_alpha_with_border(alpha: &[u8], w: u32, h: u32, r: u32) -> (u32, u32, 
     (out_w, out_h, dilated)
 }
 
+fn binarize_alpha(alpha: &mut [u8]) {
+    for a in alpha.iter_mut() {
+        *a = if *a == 0 { 0 } else { 255 };
+    }
+}
+
 fn parse_size(s: &str) -> anyhow::Result<(u32, u32)> {
     let (w_s, h_s) = s
         .split_once('x')
@@ -1390,5 +1403,12 @@ mod tests {
         let dts = render_font_dts_module(true);
         assert!(dts.contains("declare const outline: FontAtlasMeta;"));
         assert!(dts.contains("export { outline };"));
+    }
+
+    #[test]
+    fn binarize_alpha_makes_hard_edges() {
+        let mut alpha = vec![0, 1, 127, 128, 254, 255];
+        binarize_alpha(&mut alpha);
+        assert_eq!(alpha, vec![0, 255, 255, 255, 255, 255]);
     }
 }
