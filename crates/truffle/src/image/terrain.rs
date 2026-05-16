@@ -1,4 +1,4 @@
-use image::{ImageBuffer, Rgba, RgbaImage};
+use image::{Rgba, RgbaImage};
 use std::path::Path;
 
 const DEFAULT_GRASS_COLORS: [[u8; 3]; 4] = [
@@ -57,8 +57,7 @@ fn collect_visible_colors(image: &RgbaImage) -> Vec<[u8; 3]> {
 }
 
 fn build_grass_variant(source: &RgbaImage, colors: &[[u8; 3]], seed: &str) -> RgbaImage {
-    let (width, height) = source.dimensions();
-    let mut output = ImageBuffer::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+    let mut output = source.clone();
     let bottom_by_column = lowest_visible_by_column(source);
 
     for (x, bottom_y) in bottom_by_column.into_iter().enumerate() {
@@ -137,6 +136,7 @@ fn fnv1a(hash: u64, byte: u8) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageBuffer;
     use std::fs;
 
     fn test_colors() -> Vec<[u8; 3]> {
@@ -172,14 +172,14 @@ mod tests {
     }
 
     #[test]
-    fn grass_removes_original_subject_pixels_outside_overlay() {
+    fn grass_preserves_original_subject_pixels_outside_overlay() {
         let mut source = ImageBuffer::from_pixel(3, 5, Rgba([0, 0, 0, 0]));
         source.put_pixel(1, 0, Rgba([200, 20, 20, 255]));
         source.put_pixel(1, 4, Rgba([200, 20, 20, 255]));
 
         let output = build_grass_variant(&source, &test_colors(), "asset.png");
 
-        assert_eq!(output.get_pixel(1, 0).0, [0, 0, 0, 0]);
+        assert_eq!(output.get_pixel(1, 0).0, [200, 20, 20, 255]);
     }
 
     #[test]
