@@ -743,7 +743,7 @@ fn compute_kerning_table(
     }
 
     let mut out = Vec::new();
-    if let Some(gpos) = face.table_data(Tag::from_bytes(b"GPOS")) {
+    if let Some(gpos) = face.raw_face().table(Tag::from_bytes(b"GPOS")) {
         if let Ok(gpos_pairs) = compute_gpos_kerning_pairs(gpos, &chars, &gids) {
             for (left, right, kern_units) in gpos_pairs {
                 let kern_px = kern_units as f32 * scale;

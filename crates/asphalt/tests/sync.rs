@@ -377,6 +377,6 @@ fn brace_glob_sync_does_not_wipe_lockfile() {
 
     project
         .dir
-        .child("asphalt.lock.toml")
+        .child("truffle.lock.toml")
         .assert(toml_eq(expected.into()));
 }
