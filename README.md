@@ -44,7 +44,10 @@ The optimized binary will be available in `target/release/truffle` (or `truffle.
 truffle sync
 
 # Generate highlight variants for every PNG in a folder
-truffle highlight assets/images --thickness 2
+truffle image highlight assets/images --thickness 2
+
+# Generate a grass integration overlay for one sprite
+truffle image terrain assets/images/house.png
 ```
 
 ## Configuration
@@ -111,7 +114,7 @@ Requirements:
 - `truffle.toml` configuration file in the project root
 - `TRUFFLE_API_KEY` environment variable set (or provided via `--api-key`)
 
-### `truffle highlight`
+### `truffle image highlight`
 
 Creates `*-highlight.png` siblings for every PNG you point it at.
 
@@ -126,23 +129,49 @@ Example flows:
 
 ```bash
 # Preview which assets would change
-truffle highlight assets/images --dry-run
+truffle image highlight assets/images --dry-run
 
 # Force-regenerate with thicker outlines
-truffle highlight assets/images --force --thickness 3
+truffle image highlight assets/images --force --thickness 3
 
 # Target a single file
-truffle highlight assets/images/character/base.png
+truffle image highlight assets/images/character/base.png
 ```
 
 The command tracks successes, skips, and failures so you can quickly spot assets that need manual attention.
+
+### `truffle image terrain`
+
+Creates transparent `*-grass.png` overlays for integrating sprite bases into grass.
+
+| Argument / Option | Description |
+| --- | --- |
+| `<INPUT_PATH>` | File or directory containing PNGs. |
+| `--dry-run` | Log what would happen without touching files. |
+| `--force` | Overwrite existing grass overlays. |
+| `-r`, `--recursive` | Recursively process directories. |
+| `--grass-sample <PNG>` | Use visible pixels from a grass sample image as grass colors. |
+
+Example flows:
+
+```bash
+# Generate a grass overlay
+truffle image terrain assets/images/house.png
+
+# Generate a grass overlay using a sample tile
+truffle image terrain assets/images/house.png --grass-sample assets/images/grass.png
+
+# Process a folder recursively
+truffle image terrain assets/images --recursive
+```
 
 ## Development
 
 ```bash
 # Run the CLI locally
 cargo run -- sync
-cargo run -- highlight assets/images
+cargo run -- image highlight assets/images
+cargo run -- image terrain exterior.png
 
 # Check format + lints
 cargo fmt

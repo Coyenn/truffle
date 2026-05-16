@@ -3,3 +3,4 @@ pub mod highlight;
 pub mod image;
 pub mod palette;
 pub mod sync;
+pub mod terrain;
