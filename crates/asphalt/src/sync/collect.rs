@@ -20,6 +20,7 @@ pub struct CollectResults {
     pub input_sources: HashMap<String, NodeSource>,
     pub new_count: u64,
     pub any_failed: bool,
+    pub failed_files: Vec<String>,
 }
 
 pub async fn collect_events(
@@ -44,6 +45,7 @@ pub async fn collect_events(
     }
 
     let mut progress = Progress::new(mp, target);
+    let mut failed_files = Vec::new();
 
     let mut seen_paths = HashSet::new();
 
@@ -122,9 +124,10 @@ pub async fn collect_events(
 
                 progress.in_flight.remove(&path);
             }
-            super::Event::Failed(path) => {
+            super::Event::Failed { path, error } => {
                 progress.failed += 1;
                 progress.in_flight.remove(&path);
+                failed_files.push(format!("{}: {}", path.display(), error));
             }
         }
 
@@ -138,6 +141,7 @@ pub async fn collect_events(
         input_sources,
         new_count: progress.new,
         any_failed: progress.failed > 0,
+        failed_files,
     })
 }
 

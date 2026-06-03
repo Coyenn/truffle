@@ -14,9 +14,48 @@ use clap::Parser;
 use indicatif::MultiProgress;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::runtime::Runtime;
 use truffle_config::TruffleConfig;
+
+const SCRATCH_ATLAS_PNG_DIR: &str = "atlases";
+const SCRATCH_SYNC_DIR: &str = "sync";
+const SCRATCH_UNATLASED_DIR: &str = "unatlased";
+const SCRATCH_SUBSET_DIR: &str = "subset";
+
+fn scratch_atlas_png_dir(scratch_dir: &Path) -> PathBuf {
+    scratch_dir.join(SCRATCH_ATLAS_PNG_DIR)
+}
+
+fn scratch_sync_dir(scratch_dir: &Path) -> PathBuf {
+    scratch_dir.join(SCRATCH_SYNC_DIR)
+}
+
+fn scratch_unatlased_dir(scratch_dir: &Path) -> PathBuf {
+    scratch_sync_dir(scratch_dir).join(SCRATCH_UNATLASED_DIR)
+}
+
+fn scratch_subset_dir(scratch_dir: &Path) -> PathBuf {
+    scratch_sync_dir(scratch_dir).join(SCRATCH_SUBSET_DIR)
+}
+
+fn prepare_scratch_dir(scratch_dir: &Path) {
+    fs::create_dir_all(scratch_dir).ok();
+
+    for legacy in ["asphalt", "subset-sync"] {
+        let legacy_path = scratch_dir.join(legacy);
+        if legacy_path.is_dir() {
+            fs::remove_dir_all(&legacy_path).ok();
+        }
+    }
+}
+
+fn remove_scratch_subset(scratch_dir: &Path) {
+    let subset_dir = scratch_subset_dir(scratch_dir);
+    if subset_dir.is_dir() {
+        fs::remove_dir_all(&subset_dir).ok();
+    }
+}
 
 #[derive(Parser)]
 #[command(about = "Sync assets and augment metadata with image dimensions")]
@@ -64,6 +103,14 @@ pub struct SyncArgs {
     /// TRUFFLE_API_KEY environment variable (or read from .env file)
     #[arg(long)]
     pub api_key: Option<String>,
+
+    /// Skip atlas packing and sync source images directly
+    #[arg(long)]
+    pub skip_atlas: bool,
+
+    /// Only sync files matching this glob (e.g. assets/images/interface/fonts/**/*.png)
+    #[arg(long)]
+    pub sync_only: Option<String>,
 }
 
 pub fn run(args: SyncArgs) -> bool {
@@ -73,7 +120,7 @@ pub fn run(args: SyncArgs) -> bool {
         match run_async(args).await {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("[sync] ERROR: {}", e);
+                eprintln!("[sync] ERROR: {e:#}");
                 false
             }
         }
@@ -81,6 +128,21 @@ pub fn run(args: SyncArgs) -> bool {
 }
 
 async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
+    let backup = backup_asset_modules(&args)?;
+
+    let result = run_async_inner(args).await;
+
+    if result.is_err() {
+        if let Some(backup) = backup {
+            restore_asset_modules(&backup)?;
+            eprintln!("[sync] Restored previous assets module after failed sync");
+        }
+    }
+
+    result
+}
+
+async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
     // Load truffle.toml config
     let config = TruffleConfig::read()
         .await
@@ -90,6 +152,7 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         .scratch_dir
         .clone()
         .unwrap_or_else(|| config.truffle.scratch_dir.clone());
+    prepare_scratch_dir(&scratch_dir);
 
     // Auto-generate highlights if configured (before sync so they get synced too)
     if config.truffle.auto_highlight {
@@ -106,13 +169,13 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         ));
     }
 
-    let atlas_enabled = args.atlas || config.truffle.atlas;
+    let atlas_enabled = !args.skip_atlas && (args.atlas || config.truffle.atlas);
     if atlas_enabled {
         println!("[sync] Building image atlases …");
-        let atlas_dir = scratch_dir.join("atlases");
-        let atlas_codegen_dir = scratch_dir.join("asphalt");
+        let atlas_dir = scratch_atlas_png_dir(&scratch_dir);
+        let sync_codegen_dir = scratch_sync_dir(&scratch_dir);
         // Asphalt codegen writes `{input_name}.luau`. Our atlas input is named `atlases`.
-        let atlas_assets_output = atlas_codegen_dir.join("atlases.luau");
+        let atlas_assets_output = sync_codegen_dir.join("atlases.luau");
         let atlas_padding = args.atlas_padding.unwrap_or(config.truffle.atlas_padding);
         let atlas_size = args.atlas_size.unwrap_or(config.truffle.atlas_size);
         let atlas_exclude = resolve_atlas_exclude(
@@ -133,7 +196,8 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         )
         .context("Failed to build atlases")?;
 
-        std::fs::create_dir_all(&atlas_codegen_dir).ok();
+        std::fs::create_dir_all(&sync_codegen_dir).ok();
+        let unatlased_codegen_dir = scratch_unatlased_dir(&scratch_dir);
 
         if !args.dry_run {
             // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
@@ -154,7 +218,7 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
                     AsphaltInput {
                         include: Glob::new(atlas_glob.as_str())
                             .context("Invalid atlas include glob")?,
-                        output_path: atlas_codegen_dir.clone(),
+                        output_path: sync_codegen_dir.clone(),
                         bleed: false,
                         web: HashMap::new(),
                     },
@@ -177,6 +241,7 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
                             let mut updated = input.clone();
                             updated.include = Glob::new(exclude_glob.as_str())
                                 .context("Invalid atlas exclude glob")?;
+                            updated.output_path = unatlased_codegen_dir.clone();
                             inputs.insert(name.clone(), updated);
                         }
                         continue;
@@ -204,7 +269,7 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
 
             sync_with_config(asphalt_config, sync_args, multi_progress)
                 .await
-                .context("Failed to sync atlases with Asphalt")?;
+                .with_context(|| format!("Failed to sync atlases with Asphalt"))?;
         }
 
         // Load atlas asset ids produced by Asphalt
@@ -231,8 +296,14 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
             .context("Failed to build atlased asset metadata")?;
 
         if !atlas_exclude.is_empty() {
-            let excluded_assets = load_assets(&args.assets_input)
-                .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?;
+            let unatlased_assets_path = unatlased_codegen_dir.join("assets.luau");
+            let excluded_assets = if unatlased_assets_path.exists() {
+                load_assets(&unatlased_assets_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load unatlased assets: {}", e))?
+            } else {
+                load_assets(&args.assets_input)
+                    .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?
+            };
             let filtered_excluded =
                 filter_assets_by_exclude(&excluded_assets, &atlas_exclude_matcher);
             let augmented_excluded =
@@ -283,6 +354,61 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         expected_price: None,
         project: PathBuf::from("."),
     };
+
+    if let Some(sync_only) = &args.sync_only {
+        let mut asphalt_config = AsphaltConfig::read_from(PathBuf::from("."))
+            .await
+            .context("Failed to read Asphalt config from truffle.toml")?;
+        remove_scratch_subset(&scratch_dir);
+        let subset_output = scratch_subset_dir(&scratch_dir);
+        asphalt_config.inputs = HashMap::from([(
+            "assets".to_string(),
+            AsphaltInput {
+                include: Glob::new(sync_only.as_str()).context("Invalid --sync-only glob")?,
+                output_path: subset_output.clone(),
+                bleed: asphalt_config
+                    .inputs
+                    .get("assets")
+                    .map(|input| input.bleed)
+                    .unwrap_or(true),
+                web: HashMap::new(),
+            },
+        )]);
+        sync_with_config(asphalt_config, sync_args, multi_progress)
+            .await
+            .context("Failed to sync subset with Asphalt")?;
+
+        println!("[sync] Merging synced subset into existing assets module …");
+        let synced_subset = load_assets(&subset_output.join("assets.luau"))
+            .map_err(|e| anyhow::anyhow!("Failed to load synced subset assets: {}", e))?;
+        let synced_subset = if let Some(prefix) =
+            sync_subset_nested_prefix(sync_only, &args.images_folder)
+        {
+            nest_assets_under_path(synced_subset, &prefix)
+        } else {
+            synced_subset
+        };
+        let mut assets = load_assets(&args.assets_input)
+            .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?;
+        merge_asset_values(&mut assets, &synced_subset);
+        let augmented_assets = augment_assets(&assets, &args.images_folder, &FsImageMetadata);
+
+        println!("[sync] Writing augmented Luau module …");
+        fs::write(
+            &args.assets_output,
+            render_luau_module(&augmented_assets),
+        )
+        .context("Failed to write Luau file")?;
+
+        println!("[sync] Writing TypeScript declaration …");
+        fs::write(&args.dts_output, render_dts_module(&augmented_assets))
+            .context("Failed to write TypeScript file")?;
+
+        remove_scratch_subset(&scratch_dir);
+        println!("[sync] Done");
+        return Ok(());
+    }
+
     sync(sync_args, multi_progress)
         .await
         .context("Failed to sync assets with Asphalt")?;
@@ -303,6 +429,65 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
         .context("Failed to write TypeScript file")?;
 
     println!("[sync] Done");
+    Ok(())
+}
+
+struct AssetModuleBackup {
+    luau: PathBuf,
+    dts: PathBuf,
+    luau_bytes: Vec<u8>,
+    dts_bytes: Vec<u8>,
+}
+
+fn backup_asset_modules(args: &SyncArgs) -> anyhow::Result<Option<AssetModuleBackup>> {
+    if !args.assets_output.exists() && !args.dts_output.exists() {
+        return Ok(None);
+    }
+
+    let luau_bytes = if args.assets_output.exists() {
+        fs::read(&args.assets_output).with_context(|| {
+            format!(
+                "Failed to read backup source {}",
+                args.assets_output.display()
+            )
+        })?
+    } else {
+        Vec::new()
+    };
+
+    let dts_bytes = if args.dts_output.exists() {
+        fs::read(&args.dts_output).with_context(|| {
+            format!("Failed to read backup source {}", args.dts_output.display())
+        })?
+    } else {
+        Vec::new()
+    };
+
+    Ok(Some(AssetModuleBackup {
+        luau: args.assets_output.clone(),
+        dts: args.dts_output.clone(),
+        luau_bytes,
+        dts_bytes,
+    }))
+}
+
+fn restore_asset_modules(backup: &AssetModuleBackup) -> anyhow::Result<()> {
+    if !backup.luau_bytes.is_empty() {
+        fs::write(&backup.luau, &backup.luau_bytes).with_context(|| {
+            format!(
+                "Failed to restore assets module {}",
+                backup.luau.display()
+            )
+        })?;
+    }
+    if !backup.dts_bytes.is_empty() {
+        fs::write(&backup.dts, &backup.dts_bytes).with_context(|| {
+            format!(
+                "Failed to restore assets declarations {}",
+                backup.dts.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -594,6 +779,45 @@ fn merge_asset_values(
             }
         }
     }
+}
+
+fn sync_subset_nested_prefix(sync_only: &str, images_folder: &PathBuf) -> Option<Vec<String>> {
+    let images = normalize_path_for_compare(images_folder);
+    let mut pattern = sync_only.replace('\\', "/");
+    if let Some(rest) = pattern.strip_prefix(&format!("{images}/")) {
+        pattern = rest.to_string();
+    } else if pattern == images {
+        return None;
+    } else {
+        return None;
+    }
+
+    let dir = pattern.split("/**").next()?.trim_end_matches('/');
+    if dir.is_empty() {
+        return None;
+    }
+
+    Some(
+        dir.split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn nest_assets_under_path(
+    assets: BTreeMap<String, crate::assets::model::AssetValue>,
+    prefix: &[String],
+) -> BTreeMap<String, crate::assets::model::AssetValue> {
+    use crate::assets::model::AssetValue;
+
+    let mut nested = assets;
+    for segment in prefix.iter().rev() {
+        let mut wrapped = BTreeMap::new();
+        wrapped.insert(segment.clone(), AssetValue::Table(nested));
+        nested = wrapped;
+    }
+    nested
 }
 
 fn filter_assets_by_exclude(

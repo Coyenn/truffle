@@ -49,7 +49,12 @@ pub struct TruffleOptions {
     #[serde(default)]
     pub atlas_exclude: Vec<String>,
 
-    /// Scratch directory for intermediate/generated files
+    /// Scratch directory for intermediate/generated files.
+    ///
+    /// Layout:
+    /// - `{scratch}/atlases/` — packed atlas PNG textures
+    /// - `{scratch}/sync/` — Asphalt codegen scratch (`atlases.*`, `unatlased/assets.*`)
+    /// - `{scratch}/sync/subset/` — transient output for `--sync-only` (removed after merge)
     #[serde(default = "default_scratch_dir")]
     pub scratch_dir: PathBuf,
 }

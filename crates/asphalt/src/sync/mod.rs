@@ -52,7 +52,10 @@ enum Event {
         hash: Hash,
         asset_ref: Option<AssetRef>,
     },
-    Failed(PathBuf),
+    Failed {
+        path: PathBuf,
+        error: String,
+    },
 }
 
 #[derive(Debug)]
@@ -133,6 +136,18 @@ pub async fn sync_with_config(
         results.new_lockfile.write_to(&config.project_dir).await?;
     }
 
+    if results.any_failed {
+        let mut message = String::from("Some assets failed to sync");
+        if !results.failed_files.is_empty() {
+            message.push(':');
+            for failure in &results.failed_files {
+                message.push_str("\n  - ");
+                message.push_str(failure);
+            }
+        }
+        bail!(message);
+    }
+
     for (input_name, source) in results.input_sources {
         let input = config
             .inputs
@@ -157,10 +172,6 @@ pub async fn sync_with_config(
             fs::create_dir_all(&output_path).await?;
             fs::write(output_path.join(format!("{input_name}.{ext}")), code).await?;
         }
-    }
-
-    if results.any_failed {
-        bail!("Some assets failed to sync")
     }
 
     Ok(())

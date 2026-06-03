@@ -28,4 +28,5 @@ fn main() {
     println!("cargo:rustc-env=TRUFFLE_VERSION={}", version);
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
+    println!("cargo:rerun-if-changed=runtime/truffle-text");
 }

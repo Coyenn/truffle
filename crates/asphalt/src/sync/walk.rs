@@ -99,8 +99,13 @@ pub async fn walk(params: Params, config: &Config, tx: &UnboundedSender<super::E
                 tx.send(super::Event::InFlight(path.clone())).unwrap();
 
                 if let Err(e) = process_entry(state.clone(), &path, &tx).await {
-                    warn!("Failed to process file {}: {e:?}", path.display());
-                    tx.send(super::Event::Failed(path.clone())).unwrap();
+                    let error = format!("{e:#}");
+                    warn!("Failed to process file {}: {error}", path.display());
+                    tx.send(super::Event::Failed {
+                        path: path.clone(),
+                        error,
+                    })
+                    .unwrap();
                 }
             });
         }
