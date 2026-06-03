@@ -181,7 +181,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     let baseline = baseline_offset.round().max(0.0) as u32;
     let inner = args.line_height.saturating_sub(2 * args.padding) as f32;
     // Legacy marzipan cell fonts used ~21px from line top at lineHeight 95 / px 121 / padding 5.
-    let layout_baseline = args.padding as f32 + (px - inner).max(0.0) / 2.0 - 2.0;
+    let layout_baseline = layout_baseline_for(args.line_height, args.padding, px);
 
     let sizes: Vec<(u32, u32)> = rasterized
         .iter()
@@ -218,10 +218,12 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     for (g, pack) in rasterized.into_iter().zip(packed.iter().cloned()) {
         let offset_x = 0f32;
         // Legacy marzipan top bearing is layout_baseline + fontdue ymin (positive for marks above baseline).
-        let offset_y = args.line_height as f32
-            - g.h as f32
-            - 2.0 * layout_baseline
-            - g.metrics.ymin as f32;
+        let offset_y = glyph_offset_y(
+            args.line_height as f32,
+            g.h as f32,
+            layout_baseline,
+            g.metrics.ymin as f32,
+        );
 
         if g.w > 0 && g.h > 0 {
             let atlas = atlases
@@ -426,6 +428,15 @@ fn load_charset(args: &FontArgs) -> anyhow::Result<String> {
     Ok(args.charset.clone())
 }
 
+fn layout_baseline_for(line_height: u32, padding: u32, px: f32) -> f32 {
+    let inner = line_height.saturating_sub(2 * padding) as f32;
+    padding as f32 + (px - inner).max(0.0) / 2.0 - 2.0
+}
+
+fn glyph_offset_y(line_height: f32, glyph_height: f32, layout_baseline: f32, ymin: f32) -> f32 {
+    line_height - glyph_height - 2.0 * layout_baseline - ymin
+}
+
 fn derive_outline_png_path(base_png: &Path) -> PathBuf {
     let parent = base_png.parent().unwrap_or_else(|| Path::new("."));
     let stem = base_png
@@ -451,33 +462,27 @@ mod tests {
 
     #[test]
     fn glyph_vertical_offset_matches_legacy_marzipan() {
-        let font_bytes =
-            include_bytes!("../../../../../../caramel/assets/fonts/Pixolde.ttf");
-        let font = fontdue::Font::from_bytes(&font_bytes[..], fontdue::FontSettings::default())
-            .expect("parse font");
         let px = 121.0_f32;
         let line_height = 95.0_f32;
+        let padding = 5_u32;
         let marzipan_baseline_offset = 20.0_f32;
-        let inner = line_height - 10.0_f32;
-        let layout_baseline = 5.0_f32 + (px - inner).max(0.0_f32) / 2.0_f32 - 2.0_f32;
+        let layout_baseline = layout_baseline_for(line_height as u32, padding, px);
 
-        let expected: &[(&str, char, f32)] = &[
-            ("T cap", 'T', 12.0),
-            ("e lower", 'e', 27.0),
-            ("g descender", 'g', 27.0),
-            ("y descender", 'y', 27.0),
-            ("apostrophe", '\'', 12.0),
+        // Metrics captured from Pixolde.ttf at px=121 (fontdue rasterize).
+        let expected: &[(&str, u32, i32, f32)] = &[
+            ("T cap", 61, 0, 12.0),
+            ("e lower", 46, 0, 27.0),
+            ("g descender", 62, -16, 27.0),
+            ("y descender", 62, -16, 27.0),
+            ("apostrophe", 24, 37, 12.0),
         ];
 
-        for (label, ch, want) in expected {
-            let (m, _) = font.rasterize(*ch, px);
-            let offset_y =
-                line_height - m.height as f32 - 2.0 * layout_baseline - m.ymin as f32;
+        for (label, height, ymin, want) in expected {
+            let offset_y = glyph_offset_y(line_height, *height as f32, layout_baseline, *ymin as f32);
             assert_eq!(
                 offset_y + marzipan_baseline_offset,
                 *want,
-                "{label} offset mismatch (offset_y={offset_y}, ymin={})",
-                m.ymin
+                "{label} offset mismatch (offset_y={offset_y}, ymin={ymin})"
             );
         }
     }
