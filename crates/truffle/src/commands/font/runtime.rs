@@ -51,14 +51,10 @@ pub fn copy_runtime(out_dir: &Path) -> anyhow::Result<()> {
                 continue;
             }
         }
-        fs::write(&path, file.contents).with_context(|| {
-            format!("failed to write runtime file: {}", path.display())
-        })?;
+        fs::write(&path, file.contents)
+            .with_context(|| format!("failed to write runtime file: {}", path.display()))?;
     }
 
-    println!(
-        "[font] Wrote truffle-text runtime to {}",
-        out_dir.display()
-    );
+    println!("[font] Wrote truffle-text runtime to {}", out_dir.display());
     Ok(())
 }

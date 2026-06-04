@@ -4,3 +4,4 @@ pub mod image;
 pub mod palette;
 pub mod sync;
 pub mod terrain;
+pub mod translations;

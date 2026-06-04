@@ -1,6 +1,6 @@
-pub use crate::commands::highlight::{run as highlight_run, HighlightArgs};
-pub use crate::commands::palette::{run as palette_run, PaletteArgs};
-pub use crate::commands::terrain::{run as terrain_run, TerrainArgs};
+pub use crate::commands::highlight::{HighlightArgs, run as highlight_run};
+pub use crate::commands::palette::{PaletteArgs, run as palette_run};
+pub use crate::commands::terrain::{TerrainArgs, run as terrain_run};
 
 use clap::Subcommand;
 

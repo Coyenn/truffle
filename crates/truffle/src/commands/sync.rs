@@ -1,6 +1,6 @@
 use crate::assets::{
-    augment_assets, build_atlased_assets, build_atlases, load_assets, render_dts_module,
-    render_luau_module, AtlasExclude, AtlasOptions, FsImageMetadata,
+    AtlasExclude, AtlasOptions, FsImageMetadata, augment_assets, build_atlased_assets,
+    build_atlases, load_assets, render_dts_module, render_luau_module,
 };
 use crate::commands::image::HighlightArgs;
 use anyhow::Context;
@@ -381,24 +381,20 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         println!("[sync] Merging synced subset into existing assets module …");
         let synced_subset = load_assets(&subset_output.join("assets.luau"))
             .map_err(|e| anyhow::anyhow!("Failed to load synced subset assets: {}", e))?;
-        let synced_subset = if let Some(prefix) =
-            sync_subset_nested_prefix(sync_only, &args.images_folder)
-        {
-            nest_assets_under_path(synced_subset, &prefix)
-        } else {
-            synced_subset
-        };
+        let synced_subset =
+            if let Some(prefix) = sync_subset_nested_prefix(sync_only, &args.images_folder) {
+                nest_assets_under_path(synced_subset, &prefix)
+            } else {
+                synced_subset
+            };
         let mut assets = load_assets(&args.assets_input)
             .map_err(|e| anyhow::anyhow!("Failed to load assets: {}", e))?;
         merge_asset_values(&mut assets, &synced_subset);
         let augmented_assets = augment_assets(&assets, &args.images_folder, &FsImageMetadata);
 
         println!("[sync] Writing augmented Luau module …");
-        fs::write(
-            &args.assets_output,
-            render_luau_module(&augmented_assets),
-        )
-        .context("Failed to write Luau file")?;
+        fs::write(&args.assets_output, render_luau_module(&augmented_assets))
+            .context("Failed to write Luau file")?;
 
         println!("[sync] Writing TypeScript declaration …");
         fs::write(&args.dts_output, render_dts_module(&augmented_assets))
@@ -474,10 +470,7 @@ fn backup_asset_modules(args: &SyncArgs) -> anyhow::Result<Option<AssetModuleBac
 fn restore_asset_modules(backup: &AssetModuleBackup) -> anyhow::Result<()> {
     if !backup.luau_bytes.is_empty() {
         fs::write(&backup.luau, &backup.luau_bytes).with_context(|| {
-            format!(
-                "Failed to restore assets module {}",
-                backup.luau.display()
-            )
+            format!("Failed to restore assets module {}", backup.luau.display())
         })?;
     }
     if !backup.dts_bytes.is_empty() {
@@ -597,11 +590,7 @@ fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> Option<String> {
         }
     }
 
-    if key.is_empty() {
-        None
-    } else {
-        Some(key)
-    }
+    if key.is_empty() { None } else { Some(key) }
 }
 
 fn build_exclude_glob(images_folder: &PathBuf, keys: &[String]) -> Option<String> {

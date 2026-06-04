@@ -205,7 +205,11 @@ fn scan_pngs(images_folder: &Path, exclude: &AtlasExclude) -> Result<Vec<Pending
     Ok(sprites)
 }
 
-fn pack_sprites(sprites: &[PendingSprite], padding: u32, atlas_size: u32) -> Result<Vec<PlacedSprite>> {
+fn pack_sprites(
+    sprites: &[PendingSprite],
+    padding: u32,
+    atlas_size: u32,
+) -> Result<Vec<PlacedSprite>> {
     let mut atlas_index: usize = 0;
     let mut cursor_x: u32 = 0;
     let mut cursor_y: u32 = 0;

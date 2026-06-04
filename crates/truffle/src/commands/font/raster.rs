@@ -39,7 +39,14 @@ pub fn binarize_alpha(alpha: &mut [u8]) {
     }
 }
 
-pub fn blit_alpha_white(dst: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32, alpha: &[u8]) {
+pub fn blit_alpha_white(
+    dst: &mut image::RgbaImage,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+    alpha: &[u8],
+) {
     blit_alpha_color(dst, x0, y0, w, h, alpha, [255, 255, 255]);
 }
 

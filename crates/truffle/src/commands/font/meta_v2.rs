@@ -113,14 +113,8 @@ fn push_kerning(parts: &mut Vec<String>, kerning: &KerningClasses, indent: &str)
     parts.push(format!("{indent}\trightClass = {{"));
     push_u8_list(parts, &kerning.right_class, indent);
     parts.push(format!("{indent}\t}},"));
-    parts.push(format!(
-        "{indent}\tleftCount = {},",
-        kerning.left_count
-    ));
-    parts.push(format!(
-        "{indent}\trightCount = {},",
-        kerning.right_count
-    ));
+    parts.push(format!("{indent}\tleftCount = {},", kerning.left_count));
+    parts.push(format!("{indent}\trightCount = {},", kerning.right_count));
     parts.push(format!("{indent}\tmatrix = {{"));
     push_float_list(parts, &kerning.matrix, indent);
     parts.push(format!("{indent}\t}},"));

@@ -19,11 +19,7 @@ struct PendingItem {
 }
 
 /// Pack variable-size rectangles into multiple square atlases using shelf packing.
-pub fn pack_glyphs(
-    sizes: &[(u32, u32)],
-    padding: u32,
-    atlas_size: u32,
-) -> Result<Vec<PackRect>> {
+pub fn pack_glyphs(sizes: &[(u32, u32)], padding: u32, atlas_size: u32) -> Result<Vec<PackRect>> {
     if atlas_size == 0 {
         anyhow::bail!("atlas size must be > 0");
     }
@@ -123,21 +119,12 @@ pub fn page_png_path(base: &std::path::Path, page: u32, page_count: u32) -> std:
         return base.to_path_buf();
     }
     let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let stem = base
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("font");
-    let ext = base
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("png");
+    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("font");
+    let ext = base.extension().and_then(|s| s.to_str()).unwrap_or("png");
     parent.join(format!("{stem}_{page}.{ext}"))
 }
 
-pub fn write_atlas_pages(
-    pages: &[image::RgbaImage],
-    base_path: &std::path::Path,
-) -> Result<()> {
+pub fn write_atlas_pages(pages: &[image::RgbaImage], base_path: &std::path::Path) -> Result<()> {
     let page_count = pages.len() as u32;
     for (i, atlas) in pages.iter().enumerate() {
         let path = page_png_path(base_path, i as u32, page_count);

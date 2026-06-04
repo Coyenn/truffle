@@ -2,7 +2,7 @@ mod assets;
 mod commands;
 mod image;
 
-use clap::{builder::styling, Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 
 #[derive(Parser)]
 #[command(name = "truffle")]
@@ -32,6 +32,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::image::ImageCommands,
     },
+    /// Push Lexi lexicons to Roblox cloud localization
+    Translations {
+        #[command(subcommand)]
+        command: commands::translations::TranslationsCommands,
+    },
 }
 
 fn main() {
@@ -41,6 +46,7 @@ fn main() {
         Commands::Sync(args) => commands::sync::run(args),
         Commands::Font(args) => commands::font::run(args),
         Commands::Image { command } => commands::image::run(command),
+        Commands::Translations { command } => commands::translations::run(command),
     };
 
     std::process::exit(if result { 0 } else { 1 });

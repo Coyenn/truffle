@@ -11,12 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use self::kerning::build_kerning_classes;
-use self::meta_v2::{render_font_meta_dts, serialize_font_meta_luau, FontMetaV2, GlyphLayerMeta};
 use self::meta_v2::{AtlasPageMeta, float_luau};
-use self::pack::{pack_glyphs, validate_atlas_size, write_atlas_pages, PackRect};
+use self::meta_v2::{FontMetaV2, GlyphLayerMeta, render_font_meta_dts, serialize_font_meta_luau};
+use self::pack::{PackRect, pack_glyphs, validate_atlas_size, write_atlas_pages};
 use self::raster::{
-    binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
-    ink_profile_from_alpha, InkProfile,
+    InkProfile, binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
+    ink_profile_from_alpha,
 };
 
 #[derive(Parser, Debug)]
@@ -198,9 +198,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     let page_count = packed.iter().map(|p| p.page).max().unwrap_or(0) + 1;
 
     let mut atlases: Vec<image::RgbaImage> = (0..page_count)
-        .map(|_| {
-            image::RgbaImage::from_pixel(atlas_size, atlas_size, image::Rgba([0, 0, 0, 0]))
-        })
+        .map(|_| image::RgbaImage::from_pixel(atlas_size, atlas_size, image::Rgba([0, 0, 0, 0])))
         .collect();
     let mut outline_atlases: Vec<image::RgbaImage> = if outline_enabled {
         (0..page_count)
@@ -390,16 +388,8 @@ fn build_outline_layer(placed: &[PlacedGlyph], outline: u32) -> GlyphLayerMeta {
 
     for g in placed {
         let r = outline;
-        let w = if g.pack.w > 0 {
-            g.pack.w + 2 * r
-        } else {
-            0
-        };
-        let h = if g.pack.h > 0 {
-            g.pack.h + 2 * r
-        } else {
-            0
-        };
+        let w = if g.pack.w > 0 { g.pack.w + 2 * r } else { 0 };
+        let h = if g.pack.h > 0 { g.pack.h + 2 * r } else { 0 };
         advances.push(g.advance);
         offset_x.push(g.offset_x - r as f32);
         offset_y.push(g.offset_y - r as f32);
@@ -420,9 +410,8 @@ fn build_outline_layer(placed: &[PlacedGlyph], outline: u32) -> GlyphLayerMeta {
 
 fn load_charset(args: &FontArgs) -> anyhow::Result<String> {
     if let Some(path) = &args.charset_file {
-        let s = fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("failed to read charset file {}: {e}", path.display())
-        })?;
+        let s = fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("failed to read charset file {}: {e}", path.display()))?;
         return Ok(s);
     }
     Ok(args.charset.clone())
@@ -478,7 +467,8 @@ mod tests {
         ];
 
         for (label, height, ymin, want) in expected {
-            let offset_y = glyph_offset_y(line_height, *height as f32, layout_baseline, *ymin as f32);
+            let offset_y =
+                glyph_offset_y(line_height, *height as f32, layout_baseline, *ymin as f32);
             assert_eq!(
                 offset_y + marzipan_baseline_offset,
                 *want,

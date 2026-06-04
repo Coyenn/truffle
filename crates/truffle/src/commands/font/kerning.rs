@@ -172,11 +172,7 @@ pub fn kerning_lookup(classes: &KerningClasses, left_index: usize, right_index: 
     let l = classes.left_class.get(left_index).copied().unwrap_or(0) as usize;
     let r = classes.right_class.get(right_index).copied().unwrap_or(0) as usize;
     let rc = classes.right_count as usize;
-    classes
-        .matrix
-        .get(l * rc + r)
-        .copied()
-        .unwrap_or(0.0)
+    classes.matrix.get(l * rc + r).copied().unwrap_or(0.0)
 }
 
 #[cfg(test)]
