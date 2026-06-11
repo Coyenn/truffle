@@ -8,6 +8,7 @@ use asphalt::{
     cli::{SyncArgs as AsphaltSyncArgs, SyncTarget},
     config::{Config as AsphaltConfig, Input as AsphaltInput},
     glob::Glob,
+    lockfile::RawLockfile,
     sync, sync_with_config,
 };
 use clap::Parser;
@@ -374,9 +375,27 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
                 web: HashMap::new(),
             },
         )]);
+        let project_dir = PathBuf::from(".");
+        let full_lockfile = RawLockfile::read_from(&project_dir)
+            .await
+            .context("Failed to read lockfile before subset sync")?
+            .into_lockfile()?;
+
         sync_with_config(asphalt_config, sync_args, multi_progress)
             .await
             .context("Failed to sync subset with Asphalt")?;
+
+        println!("[sync] Merging synced subset into existing lockfile …");
+        let subset_lockfile = RawLockfile::read_from(&project_dir)
+            .await
+            .context("Failed to read lockfile after subset sync")?
+            .into_lockfile()?;
+        let mut merged_lockfile = full_lockfile;
+        merged_lockfile.absorb(subset_lockfile);
+        merged_lockfile
+            .write_to(&project_dir)
+            .await
+            .context("Failed to write merged lockfile")?;
 
         println!("[sync] Merging synced subset into existing assets module …");
         let synced_subset = load_assets(&subset_output.join("assets.luau"))

@@ -213,6 +213,8 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     let mut ink_profiles: HashMap<char, InkProfile> = HashMap::new();
     let mut placed: Vec<PlacedGlyph> = Vec::with_capacity(rasterized.len());
 
+    let outline_radius = if outline_enabled { args.outline } else { 0 };
+
     for (g, pack) in rasterized.into_iter().zip(packed.iter().cloned()) {
         let offset_x = 0f32;
         // Legacy marzipan top bearing is layout_baseline + fontdue ymin (positive for marks above baseline).
@@ -224,10 +226,13 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         );
 
         if g.w > 0 && g.h > 0 {
+            // The packed rect reserves room for the outline; ink sits centered inside it.
+            let ink_x = pack.x + outline_radius;
+            let ink_y = pack.y + outline_radius;
             let atlas = atlases
                 .get_mut(pack.page as usize)
                 .ok_or_else(|| anyhow::anyhow!("invalid atlas page {}", pack.page))?;
-            blit_alpha_white(atlas, pack.x, pack.y, g.w, g.h, &g.bitmap);
+            blit_alpha_white(atlas, ink_x, ink_y, g.w, g.h, &g.bitmap);
             ink_profiles.insert(
                 g.ch,
                 ink_profile_from_alpha(&g.bitmap, g.w, g.h, g.metrics.ymin, g.metrics.xmin, 0),
@@ -236,13 +241,11 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
             if outline_enabled {
                 let r = args.outline;
                 let (dw, dh, dilated) = dilate_alpha_with_border(&g.bitmap, g.w, g.h, r);
-                let ox = pack.x.saturating_sub(r);
-                let oy = pack.y.saturating_sub(r);
                 let outline_atlas = outline_atlases
                     .get_mut(pack.page as usize)
                     .ok_or_else(|| anyhow::anyhow!("invalid outline atlas page {}", pack.page))?;
-                blit_alpha_color(outline_atlas, ox, oy, dw, dh, &dilated, [0, 0, 0]);
-                blit_alpha_white(outline_atlas, pack.x, pack.y, g.w, g.h, &g.bitmap);
+                blit_alpha_color(outline_atlas, pack.x, pack.y, dw, dh, &dilated, [0, 0, 0]);
+                blit_alpha_white(outline_atlas, ink_x, ink_y, g.w, g.h, &g.bitmap);
             }
         }
 
@@ -280,7 +283,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         args.kerning_gap,
     );
 
-    let glyphs = build_glyph_layer(&placed);
+    let glyphs = build_glyph_layer(&placed, outline_radius);
     let outline_layer = if outline_enabled {
         Some(build_outline_layer(&placed, args.outline))
     } else {
@@ -355,21 +358,23 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_glyph_layer(placed: &[PlacedGlyph]) -> GlyphLayerMeta {
+fn build_glyph_layer(placed: &[PlacedGlyph], outline_radius: u32) -> GlyphLayerMeta {
     let mut advances = Vec::with_capacity(placed.len());
     let mut offset_x = Vec::with_capacity(placed.len());
     let mut offset_y = Vec::with_capacity(placed.len());
     let mut rects = Vec::with_capacity(placed.len() * 5);
 
     for g in placed {
+        // The packed rect reserves room for the outline; the ink rect is centered inside it.
+        let r = if g.pack.w > 0 { outline_radius } else { 0 };
         advances.push(g.advance);
         offset_x.push(g.offset_x);
         offset_y.push(g.offset_y);
         rects.push(g.pack.page);
-        rects.push(g.pack.x);
-        rects.push(g.pack.y);
-        rects.push(g.pack.w);
-        rects.push(g.pack.h);
+        rects.push(g.pack.x + r);
+        rects.push(g.pack.y + r);
+        rects.push(g.pack.w.saturating_sub(2 * r));
+        rects.push(g.pack.h.saturating_sub(2 * r));
     }
 
     GlyphLayerMeta {
@@ -387,17 +392,14 @@ fn build_outline_layer(placed: &[PlacedGlyph], outline: u32) -> GlyphLayerMeta {
     let mut rects = Vec::with_capacity(placed.len() * 5);
 
     for g in placed {
-        let r = outline;
-        let w = if g.pack.w > 0 { g.pack.w + 2 * r } else { 0 };
-        let h = if g.pack.h > 0 { g.pack.h + 2 * r } else { 0 };
         advances.push(g.advance);
-        offset_x.push(g.offset_x - r as f32);
-        offset_y.push(g.offset_y - r as f32);
+        offset_x.push(g.offset_x - outline as f32);
+        offset_y.push(g.offset_y - outline as f32);
         rects.push(g.pack.page);
-        rects.push(g.pack.x.saturating_sub(r));
-        rects.push(g.pack.y.saturating_sub(r));
-        rects.push(w);
-        rects.push(h);
+        rects.push(g.pack.x);
+        rects.push(g.pack.y);
+        rects.push(g.pack.w);
+        rects.push(g.pack.h);
     }
 
     GlyphLayerMeta {
@@ -442,6 +444,47 @@ fn derive_outline_png_path(base_png: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glyph_layer_rects_are_ink_tight_and_outline_uses_pack_rect() {
+        let outline = 5_u32;
+        let placed = vec![
+            PlacedGlyph {
+                ch: 'A',
+                pack: PackRect {
+                    page: 0,
+                    x: 10,
+                    y: 20,
+                    w: 30 + 2 * outline,
+                    h: 40 + 2 * outline,
+                },
+                offset_x: 0.0,
+                offset_y: 12.0,
+                advance: 31.0,
+            },
+            PlacedGlyph {
+                ch: ' ',
+                pack: PackRect {
+                    page: 0,
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+                offset_x: 0.0,
+                offset_y: 0.0,
+                advance: 15.0,
+            },
+        ];
+
+        let base = build_glyph_layer(&placed, outline);
+        assert_eq!(&base.rects[0..5], &[0, 15, 25, 30, 40]);
+        assert_eq!(&base.rects[5..10], &[0, 0, 0, 0, 0]);
+
+        let outline_layer = build_outline_layer(&placed, outline);
+        assert_eq!(&outline_layer.rects[0..5], &[0, 10, 20, 40, 50]);
+        assert_eq!(outline_layer.offset_y[0], 7.0);
+    }
 
     #[test]
     fn derive_outline_path() {
