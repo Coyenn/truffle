@@ -21,7 +21,7 @@ pub struct PushArgs {
     #[arg(long)]
     pub dedupe: bool,
 
-    /// Roblox universe/game ID (defaults to MANTLE_UNIVERSE_ID)
+    /// Roblox universe/game ID (defaults to ROBLOX_UNIVERSE_ID)
     pub game_id: Option<u64>,
 
     /// Path to lexicon .luau file
@@ -43,7 +43,7 @@ pub fn run(args: PushArgs) -> bool {
 fn run_impl(args: PushArgs) -> anyhow::Result<()> {
     let api_key = env::var("LEXI_AUTH_TOKEN").ok();
     let game_id = args.game_id.or_else(|| {
-        env::var("MANTLE_UNIVERSE_ID")
+        env::var("ROBLOX_UNIVERSE_ID")
             .ok()
             .and_then(|v| v.parse().ok())
     });
@@ -57,7 +57,7 @@ fn run_impl(args: PushArgs) -> anyhow::Result<()> {
     if game_id.is_none() || api_key.is_none() {
         anyhow::bail!(
             "missing game id or LEXI_AUTH_TOKEN\n\
-             set MANTLE_UNIVERSE_ID when game id is omitted"
+             set ROBLOX_UNIVERSE_ID when game id is omitted"
         );
     }
 
