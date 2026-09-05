@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Truffle image projection map, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "source_size", "output_size", "rows"],
+  "properties": {
+    "version": { "const": 1 },
+    "source_size": { "$ref": "#/$defs/size" },
+    "output_size": { "$ref": "#/$defs/size" },
+    "palette": {
+      "type": "array",
+      "minItems": 1,
+      "default": [[255, 255, 255, 255]],
+      "items": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "pixels"],
+        "properties": {
+          "at": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "$ref": "#/$defs/coordinate" }
+          },
+          "pixels": {
+            "description": "Each tuple is [source_x, source_y, palette_index]; destination x advances by one.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "$ref": "#/$defs/coordinate" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "coordinate": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "size": {
+      "description": "[width, height]; the CLI also validates that their product is at most 67108864.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+    }
+  }
+}

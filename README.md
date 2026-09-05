@@ -140,6 +140,22 @@ truffle image highlight assets/images/character/base.png
 
 The command tracks successes, skips, and failures so you can quickly spot assets that need manual attention.
 
+### `truffle image project`
+
+Generate a PNG from one painted source and one self-contained JSON coordinate map.
+The map includes the output dimensions, silhouette, and per-pixel RGBA shading;
+reuse it for many designs without an editor, base atlas, or separate shade image.
+
+```bash
+truffle image project paint.png --map shirt.json --output shirt.png
+truffle image project paint.png --map shirt.json --output shirt.png --force
+```
+
+Identical reruns leave output bytes and modification times untouched. `--dry-run`
+validates both inputs without writing. See the [format and authoring guide](docs/image-project.md)
+and [JSON Schema](schemas/projection.schema.json) for maps that can address shirts,
+pants, shoes, animations, or arbitrary pixel art.
+
 ### `truffle image terrain`
 
 Creates transparent `*-grass.png` overlays for integrating sprite bases into grass.
