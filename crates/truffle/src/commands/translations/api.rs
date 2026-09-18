@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use log::warn;
-use reqwest::StatusCode;
 use reqwest::blocking::Client;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -297,7 +297,11 @@ impl LocalizationClient {
                 return serde_json::from_str(&body).context("failed to parse PATCH response");
             }
 
-            let body = response.text().unwrap_or_default();
+            // An unreadable error body still leaves the status for diagnostics.
+            let mut body = String::new();
+            if let Ok(text) = response.text() {
+                body = text;
+            }
             let should_retry = TRANSIENT_STATUS_CODES.contains(&status);
             if should_retry && attempt < PATCH_MAX_RETRIES {
                 let wait_seconds = 2_u64.pow(attempt.saturating_sub(1)).min(60);

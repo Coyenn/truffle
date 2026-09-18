@@ -1,35 +1,36 @@
+use anyhow::Context;
 use image::{Rgba, RgbaImage};
 use std::collections::HashSet;
 use std::path::Path;
 
-pub fn load_palette_colors(palette_path: &Path) -> Result<Vec<[u8; 3]>, String> {
+pub fn load_palette_colors(palette_path: &Path) -> anyhow::Result<Vec<[u8; 3]>> {
     let palette_image = image::open(palette_path)
-        .map_err(|e| format!("Failed to read palette {}: {}", palette_path.display(), e))?
+        .with_context(|| format!("Failed to read palette {}", palette_path.display()))?
         .to_rgba8();
     let colors = collect_palette_colors(&palette_image);
 
     if colors.is_empty() {
-        return Err(format!(
+        anyhow::bail!(
             "Palette image contains no usable colors: {}",
             palette_path.display()
-        ));
+        );
     }
 
     Ok(colors)
 }
 
-pub fn apply_palette_to_path(image_path: &Path, palette_colors: &[[u8; 3]]) -> Result<(), String> {
+pub fn apply_palette_to_path(image_path: &Path, palette_colors: &[[u8; 3]]) -> anyhow::Result<()> {
     if palette_colors.is_empty() {
-        return Err("Palette contains no colors".into());
+        anyhow::bail!("Palette contains no colors");
     }
 
     let source = image::open(image_path)
-        .map_err(|e| format!("Failed to read image {}: {}", image_path.display(), e))?
+        .with_context(|| format!("Failed to read image {}", image_path.display()))?
         .to_rgba8();
     let output = apply_palette(&source, palette_colors);
     output
         .save(image_path)
-        .map_err(|e| format!("Failed to write image {}: {}", image_path.display(), e))
+        .with_context(|| format!("Failed to write image {}", image_path.display()))
 }
 
 fn collect_palette_colors(palette_image: &RgbaImage) -> Vec<[u8; 3]> {
@@ -133,6 +134,6 @@ mod tests {
     #[test]
     fn empty_palette_validation_errors() {
         let err = apply_palette_to_path(Path::new("ignored.png"), &[]).unwrap_err();
-        assert!(err.contains("Palette contains no colors"));
+        assert!(err.to_string().contains("Palette contains no colors"));
     }
 }

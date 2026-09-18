@@ -1,4 +1,5 @@
 use crate::image::terrain;
+use anyhow::Context;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -55,31 +56,45 @@ fn get_terrain_path(image_path: &Path) -> PathBuf {
     path
 }
 
-fn load_colors(sample_path: Option<&Path>, defaults: Vec<[u8; 3]>) -> Result<Vec<[u8; 3]>, String> {
+fn load_colors(sample_path: Option<&Path>, defaults: Vec<[u8; 3]>) -> anyhow::Result<Vec<[u8; 3]>> {
     match sample_path {
-        Some(path) => terrain::load_sample_colors(path),
+        Some(path) => terrain::load_sample_colors(path)
+            .with_context(|| format!("Failed to load grass sample {}", path.display())),
         None => Ok(defaults),
     }
 }
 
-fn collect_png_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {
+fn collect_png_files(path: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
+    let mut png_files = Vec::new();
     if recursive {
-        Ok(WalkDir::new(path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_path_buf())
-            .filter(|p| is_png(p) && !is_generated_terrain(p))
-            .collect())
+        for entry in WalkDir::new(path).into_iter() {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            if entry.file_type().is_file()
+                && is_png(entry.path())
+                && !is_generated_terrain(entry.path())
+            {
+                png_files.push(entry.path().to_path_buf());
+            }
+        }
     } else {
-        Ok(std::fs::read_dir(path)
-            .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-            .map(|e| e.path())
-            .filter(|p| is_png(p) && !is_generated_terrain(p))
-            .collect())
+        for entry in std::fs::read_dir(path)
+            .with_context(|| format!("Failed to read directory {}", path.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            let is_file = match entry.file_type() {
+                Ok(file_type) => file_type.is_file(),
+                // Skip entries whose type cannot be determined.
+                Err(_) => false,
+            };
+            if is_file && is_png(&entry.path()) && !is_generated_terrain(&entry.path()) {
+                png_files.push(entry.path());
+            }
+        }
     }
+    png_files.sort();
+    Ok(png_files)
 }
 
 fn process_image(
@@ -87,7 +102,7 @@ fn process_image(
     colors: &[[u8; 3]],
     dry_run: bool,
     force: bool,
-) -> Result<bool, String> {
+) -> anyhow::Result<bool> {
     let output_path = get_terrain_path(image_path);
 
     if output_path.exists() && !force {
@@ -108,11 +123,10 @@ fn process_image(
     }
 
     println!("[terrain] Processing: {}", image_path.display());
-    terrain::generate_grass_variant(image_path, &output_path, colors).map_err(|e| {
+    terrain::generate_grass_variant(image_path, &output_path, colors).with_context(|| {
         format!(
-            "Failed to generate grass overlay for {}: {}",
-            image_path.display(),
-            e
+            "Failed to generate grass overlay for {}",
+            image_path.display()
         )
     })?;
 
@@ -123,24 +137,18 @@ fn process_image(
 fn process_path(
     input_path: &Path,
     options: &ProcessOptions<'_>,
-) -> Result<(usize, usize, usize), String> {
+) -> anyhow::Result<(usize, usize, usize)> {
     let mut processed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
 
     if !input_path.exists() {
-        return Err(format!(
-            "Input path does not exist: {}",
-            input_path.display()
-        ));
+        anyhow::bail!("Input path does not exist: {}", input_path.display());
     }
 
     let png_files = if input_path.is_file() {
         if !is_png(input_path) {
-            return Err(format!(
-                "Input must be a PNG file: {}",
-                input_path.display()
-            ));
+            anyhow::bail!("Input must be a PNG file: {}", input_path.display());
         }
         vec![input_path.to_path_buf()]
     } else {
@@ -160,8 +168,8 @@ fn process_path(
         match process_image(&file, options.colors, options.dry_run, options.force) {
             Ok(true) => processed += 1,
             Ok(false) => skipped += 1,
-            Err(err) => {
-                eprintln!("[terrain] ERROR: {}", err);
+            Err(error) => {
+                eprintln!("[terrain] ERROR: {error:#}");
                 errors += 1;
             }
         }
@@ -203,8 +211,8 @@ pub fn run(args: TerrainArgs) -> bool {
 
     match process_path(&args.input_path, &options) {
         Ok((processed, _, _)) => processed > 0 || args.dry_run,
-        Err(err) => {
-            eprintln!("[terrain] ERROR: {}", err);
+        Err(error) => {
+            eprintln!("[terrain] ERROR: {error:#}");
             false
         }
     }

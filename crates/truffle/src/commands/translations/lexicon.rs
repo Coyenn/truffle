@@ -27,9 +27,30 @@ impl UserData for LexiContext {
     }
 }
 
-fn lua_err(error: mlua::Error, context: &str) -> anyhow::Error {
-    anyhow::anyhow!("{context}: {error}")
+fn lua_err(error: mlua::Error, context: &'static str) -> LexiconError {
+    LexiconError {
+        context,
+        message: error.to_string(),
+    }
 }
+
+/// Lexicon Lua failure with its operation context.
+///
+/// `mlua::Error` is not `Send + Sync`, so it cannot travel through
+/// `anyhow`; this named type carries the rendered message instead.
+#[derive(Debug)]
+struct LexiconError {
+    context: &'static str,
+    message: String,
+}
+
+impl std::fmt::Display for LexiconError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.message)
+    }
+}
+
+impl std::error::Error for LexiconError {}
 
 fn make_fake_instance(lua: &Lua) -> mlua::Result<Table> {
     let instance = lua.create_table()?;

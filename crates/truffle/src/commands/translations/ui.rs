@@ -164,15 +164,13 @@ impl PushUi {
             println!("  duplicate keys   {}", summary.duplicate_keys);
             println!("  rows to remove     {}", summary.rows_to_remove);
 
-            let mut shown = 0usize;
-            for (key, extra) in &summary.keys {
+            for (shown, (key, extra)) in summary.keys.iter().enumerate() {
                 if shown >= KEY_DISPLAY_LIMIT {
                     let remaining = summary.keys.len() - shown;
                     println!("  … and {remaining} more duplicate keys");
                     break;
                 }
                 println!("    {}", format!("- {key} (×{extra})").red());
-                shown += 1;
             }
             println!();
         });

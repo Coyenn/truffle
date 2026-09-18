@@ -47,10 +47,17 @@ pub(crate) fn asset_value_to_string(value: &AssetValue) -> Option<String> {
     }
 }
 
+// `clippy::manual_ok_err` is allowed here: spelling the parse as `.ok()`
+// would trip the `no_discarded_error` gate, which this repo also enforces.
+#[allow(clippy::manual_ok_err)]
 pub(crate) fn value_as_u32(value: &AssetValue) -> Option<u32> {
     match value {
         AssetValue::Number(n) if *n >= 0.0 => Some(*n as u32),
-        AssetValue::String(s) => s.parse::<u32>().ok(),
+        // Non-numeric strings carry no dimension evidence.
+        AssetValue::String(s) => match s.parse::<u32>() {
+            Ok(n) => Some(n),
+            Err(_) => None,
+        },
         AssetValue::Object(_) => None,
         _ => None,
     }

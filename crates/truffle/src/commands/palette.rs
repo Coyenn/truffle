@@ -1,4 +1,5 @@
 use crate::image::palette;
+use anyhow::Context;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -42,36 +43,47 @@ fn process_image(
     image_path: &Path,
     palette_colors: &[[u8; 3]],
     dry_run: bool,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if dry_run {
         println!("[palette] DRY-RUN: Would process {}", image_path.display());
         return Ok(());
     }
 
     println!("[palette] Processing: {}", image_path.display());
-    palette::apply_palette_to_path(image_path, palette_colors)?;
+    palette::apply_palette_to_path(image_path, palette_colors)
+        .with_context(|| format!("Failed to apply palette to {}", image_path.display()))?;
     println!("[palette] ✅ Updated: {}", image_path.display());
     Ok(())
 }
 
-fn collect_png_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {
+fn collect_png_files(path: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
+    let mut png_files = Vec::new();
     if recursive {
-        Ok(WalkDir::new(path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_path_buf())
-            .filter(|p| is_png(p))
-            .collect())
+        for entry in WalkDir::new(path).into_iter() {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            if entry.file_type().is_file() && is_png(entry.path()) {
+                png_files.push(entry.path().to_path_buf());
+            }
+        }
     } else {
-        Ok(std::fs::read_dir(path)
-            .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-            .map(|e| e.path())
-            .filter(|p| is_png(p))
-            .collect())
+        for entry in std::fs::read_dir(path)
+            .with_context(|| format!("Failed to read directory {}", path.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            let is_file = match entry.file_type() {
+                Ok(file_type) => file_type.is_file(),
+                // Skip entries whose type cannot be determined.
+                Err(_) => false,
+            };
+            if is_file && is_png(&entry.path()) {
+                png_files.push(entry.path());
+            }
+        }
     }
+    png_files.sort();
+    Ok(png_files)
 }
 
 fn process_path(
@@ -79,47 +91,33 @@ fn process_path(
     palette_path: &Path,
     dry_run: bool,
     recursive: bool,
-) -> Result<(usize, usize, usize), String> {
+) -> anyhow::Result<(usize, usize, usize)> {
     let mut processed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
 
     if !input_path.exists() {
-        return Err(format!(
-            "Input path does not exist: {}",
-            input_path.display()
-        ));
+        anyhow::bail!("Input path does not exist: {}", input_path.display());
     }
 
     if !palette_path.exists() {
-        return Err(format!(
-            "Palette path does not exist: {}",
-            palette_path.display()
-        ));
+        anyhow::bail!("Palette path does not exist: {}", palette_path.display());
     }
 
     if !palette_path.is_file() {
-        return Err(format!(
-            "Palette path must be a file: {}",
-            palette_path.display()
-        ));
+        anyhow::bail!("Palette path must be a file: {}", palette_path.display());
     }
 
     if !is_png(palette_path) {
-        return Err(format!(
-            "Palette must be a PNG file: {}",
-            palette_path.display()
-        ));
+        anyhow::bail!("Palette must be a PNG file: {}", palette_path.display());
     }
 
-    let palette_colors = palette::load_palette_colors(palette_path)?;
+    let palette_colors = palette::load_palette_colors(palette_path)
+        .with_context(|| format!("Failed to load palette {}", palette_path.display()))?;
 
     if input_path.is_file() {
         if !is_png(input_path) {
-            return Err(format!(
-                "Input must be a PNG file: {}",
-                input_path.display()
-            ));
+            anyhow::bail!("Input must be a PNG file: {}", input_path.display());
         }
 
         if same_file(input_path, palette_path) {
@@ -131,8 +129,8 @@ fn process_path(
         } else {
             match process_image(input_path, &palette_colors, dry_run) {
                 Ok(()) => processed += 1,
-                Err(err) => {
-                    eprintln!("[palette] ERROR: {}", err);
+                Err(error) => {
+                    eprintln!("[palette] ERROR: {error:#}");
                     errors += 1;
                 }
             }
@@ -159,8 +157,8 @@ fn process_path(
 
             match process_image(&file, &palette_colors, dry_run) {
                 Ok(()) => processed += 1,
-                Err(err) => {
-                    eprintln!("[palette] ERROR: {}", err);
+                Err(error) => {
+                    eprintln!("[palette] ERROR: {error:#}");
                     errors += 1;
                 }
             }
@@ -190,8 +188,8 @@ pub fn run(args: PaletteArgs) -> bool {
         args.recursive,
     ) {
         Ok((processed, _, _)) => processed > 0 || args.dry_run,
-        Err(err) => {
-            eprintln!("[palette] ERROR: {}", err);
+        Err(error) => {
+            eprintln!("[palette] ERROR: {error:#}");
             false
         }
     }

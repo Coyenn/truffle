@@ -24,8 +24,14 @@ pub fn ink_profile_from_alpha(
         for x in 0..w {
             let a = alpha[row_off + x as usize];
             if a > threshold {
-                left = Some(left.map_or(x, |v| v.min(x)));
-                right = Some(right.map_or(x, |v| v.max(x)));
+                left = Some(match left {
+                    Some(v) => v.min(x),
+                    None => x,
+                });
+                right = Some(match right {
+                    Some(v) => v.max(x),
+                    None => x,
+                });
             }
         }
         rows.push(left.zip(right));

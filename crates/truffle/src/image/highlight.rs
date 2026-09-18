@@ -1,3 +1,4 @@
+use anyhow::Context;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use std::path::Path;
 
@@ -11,18 +12,18 @@ pub fn generate_highlight(
     input_path: &Path,
     output_path: &Path,
     thickness: u32,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if thickness == 0 {
-        return Err("Outline thickness must be >= 1".into());
+        anyhow::bail!("Outline thickness must be >= 1");
     }
 
     let image = image::open(input_path)
-        .map_err(|e| format!("Failed to read {}: {}", input_path.display(), e))?;
+        .with_context(|| format!("Failed to read {}", input_path.display()))?;
     let base = image.to_rgba8();
     let highlight = build_highlight(&base, thickness as usize);
     highlight
         .save(output_path)
-        .map_err(|e| format!("Failed to write {}: {}", output_path.display(), e))
+        .with_context(|| format!("Failed to write {}", output_path.display()))
 }
 
 fn build_highlight(original: &RgbaImage, radius: usize) -> RgbaImage {

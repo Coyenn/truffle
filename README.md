@@ -46,6 +46,9 @@ truffle sync
 # Generate highlight variants for every PNG in a folder
 truffle image highlight assets/images --thickness 2
 
+# Snap messy or off-grid pixels back to a crisp pixel-art grid
+truffle image snap assets/images --recursive
+
 # Generate a grass integration overlay for one sprite
 truffle image terrain assets/images/house.png
 ```
@@ -155,6 +158,39 @@ Identical reruns leave output bytes and modification times untouched. `--dry-run
 validates both inputs without writing. See the [format and authoring guide](docs/image-project.md)
 and [JSON Schema](schemas/projection.schema.json) for maps that can address shirts,
 pants, shoes, animations, or arbitrary pixel art.
+
+### `truffle image snap`
+
+Snaps messy, blurry, or off-grid pixels (e.g. AI-generated sprites) back to a
+crisp pixel-art grid, using the open-source
+[Sprite Fusion Pixel Snapper](https://github.com/Hugo-Dz/spritefusion-pixel-snapper)
+(MIT). Accepts PNG/JPEG input and always writes PNG output; without `--output`,
+each input gets a `<stem>-snapped.png` sibling.
+
+| Argument / Option | Description |
+| --- | --- |
+| `<INPUT_PATH>` | File or directory containing PNG/JPEGs. Directories are scanned non-recursively unless `-r` is passed. |
+| `-o`, `--output <PATH>` | Output PNG file (single input) or output directory (directory input). |
+| `--colors <N>` | Number of palette colors quantized before snapping (default `16`). |
+| `--pixel-size <PIXELS>` | Override the auto-detected pixel size. |
+| `--palette <HEX,...>` | Constrain the output to comma-separated 6-digit hex colors. |
+| `--palette-png <PNG>` | Constrain the output to the visible colors of a palette PNG. |
+| `--dry-run` | Log what would happen without touching files. |
+| `--force` | Overwrite existing snapped outputs. |
+| `-r`, `--recursive` | Recursively process directories. |
+
+Example flows:
+
+```bash
+# Snap one sprite (writes sprite-snapped.png beside it)
+truffle image snap assets/images/slime.png
+
+# Snap a folder recursively into an output directory
+truffle image snap assets/images --recursive --output assets/snapped
+
+# Snap with a fixed palette and explicit pixel size
+truffle image snap assets/images --palette 0d2b45,ffecd6 --pixel-size 8
+```
 
 ### `truffle image terrain`
 

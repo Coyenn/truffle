@@ -34,13 +34,19 @@ pub struct ProjectArgs {
 }
 
 fn default_output(source: &Path) -> PathBuf {
-    let mut name = source.file_stem().unwrap_or_default().to_os_string();
+    let mut name = match source.file_stem() {
+        Some(stem) => stem.to_os_string(),
+        None => std::ffi::OsString::new(),
+    };
     name.push("-projected.png");
     source.with_file_name(name)
 }
 
 fn project(args: ProjectArgs) -> Result<()> {
-    let output_path = args.output.unwrap_or_else(|| default_output(&args.source));
+    let output_path = match args.output {
+        Some(ref output) => output.clone(),
+        None => default_output(&args.source),
+    };
     ensure!(
         output_path
             .extension()

@@ -1,6 +1,6 @@
 use crate::assets::{
-    AtlasExclude, AtlasOptions, FsImageMetadata, augment_assets, build_atlased_assets,
-    build_atlases, load_assets, render_dts_module, render_luau_module,
+    augment_assets, build_atlased_assets, build_atlases, load_assets, render_dts_module,
+    render_luau_module, AtlasExclude, AtlasOptions, FsImageMetadata,
 };
 use crate::commands::image::HighlightArgs;
 use anyhow::Context;
@@ -40,22 +40,28 @@ fn scratch_subset_dir(scratch_dir: &Path) -> PathBuf {
     scratch_sync_dir(scratch_dir).join(SCRATCH_SUBSET_DIR)
 }
 
-fn prepare_scratch_dir(scratch_dir: &Path) {
-    fs::create_dir_all(scratch_dir).ok();
+fn prepare_scratch_dir(scratch_dir: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(scratch_dir)
+        .with_context(|| format!("Failed to create scratch dir {}", scratch_dir.display()))?;
 
     for legacy in ["asphalt", "subset-sync"] {
         let legacy_path = scratch_dir.join(legacy);
         if legacy_path.is_dir() {
-            fs::remove_dir_all(&legacy_path).ok();
+            fs::remove_dir_all(&legacy_path).with_context(|| {
+                format!("Failed to remove legacy dir {}", legacy_path.display())
+            })?;
         }
     }
+    Ok(())
 }
 
-fn remove_scratch_subset(scratch_dir: &Path) {
+fn remove_scratch_subset(scratch_dir: &Path) -> anyhow::Result<()> {
     let subset_dir = scratch_subset_dir(scratch_dir);
     if subset_dir.is_dir() {
-        fs::remove_dir_all(&subset_dir).ok();
+        fs::remove_dir_all(&subset_dir)
+            .with_context(|| format!("Failed to remove {}", subset_dir.display()))?;
     }
+    Ok(())
 }
 
 #[derive(Parser)]
@@ -149,11 +155,11 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         .await
         .context("Failed to read truffle.toml. Make sure it exists in the current directory.")?;
 
-    let scratch_dir = args
-        .scratch_dir
-        .clone()
-        .unwrap_or_else(|| config.truffle.scratch_dir.clone());
-    prepare_scratch_dir(&scratch_dir);
+    let scratch_dir = match args.scratch_dir.clone() {
+        Some(dir) => dir,
+        None => config.truffle.scratch_dir.clone(),
+    };
+    prepare_scratch_dir(&scratch_dir)?;
 
     // Auto-generate highlights if configured (before sync so they get synced too)
     if config.truffle.auto_highlight {
@@ -197,7 +203,12 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         )
         .context("Failed to build atlases")?;
 
-        std::fs::create_dir_all(&sync_codegen_dir).ok();
+        std::fs::create_dir_all(&sync_codegen_dir).with_context(|| {
+            format!(
+                "Failed to create codegen dir {}",
+                sync_codegen_dir.display()
+            )
+        })?;
         let unatlased_codegen_dir = scratch_unatlased_dir(&scratch_dir);
 
         if !args.dry_run {
@@ -270,7 +281,7 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
 
             sync_with_config(asphalt_config, sync_args, multi_progress)
                 .await
-                .with_context(|| format!("Failed to sync atlases with Asphalt"))?;
+                .context("Failed to sync atlases with Asphalt")?;
         }
 
         // Load atlas asset ids produced by Asphalt
@@ -360,7 +371,7 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         let mut asphalt_config = AsphaltConfig::read_from(PathBuf::from("."))
             .await
             .context("Failed to read Asphalt config from truffle.toml")?;
-        remove_scratch_subset(&scratch_dir);
+        remove_scratch_subset(&scratch_dir)?;
         let subset_output = scratch_subset_dir(&scratch_dir);
         asphalt_config.inputs = HashMap::from([(
             "assets".to_string(),
@@ -419,7 +430,7 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         fs::write(&args.dts_output, render_dts_module(&augmented_assets))
             .context("Failed to write TypeScript file")?;
 
-        remove_scratch_subset(&scratch_dir);
+        remove_scratch_subset(&scratch_dir)?;
         println!("[sync] Done");
         return Ok(());
     }
@@ -554,8 +565,8 @@ fn resolve_api_key(provided: Option<String>) -> anyhow::Result<String> {
         return Ok(key);
     }
 
-    if let Ok(key) = std::env::var("TRUFFLE_API_KEY") {
-        return Ok(key);
+    if let Some(key) = crate::config::ApiKey::from_env() {
+        return Ok(key.into_inner());
     }
 
     if let Ok(env_content) = fs::read_to_string(".env") {
@@ -569,11 +580,7 @@ fn resolve_api_key(provided: Option<String>) -> anyhow::Result<String> {
     anyhow::bail!("TRUFFLE_API_KEY environment variable is not set. Not syncing assets.")
 }
 
-fn resolve_atlas_exclude(
-    cli: &[String],
-    config: &[String],
-    images_folder: &PathBuf,
-) -> Vec<String> {
+fn resolve_atlas_exclude(cli: &[String], config: &[String], images_folder: &Path) -> Vec<String> {
     let raw = if !cli.is_empty() { cli } else { config };
     let mut out: Vec<String> = raw
         .iter()
@@ -585,7 +592,7 @@ fn resolve_atlas_exclude(
     out
 }
 
-fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> Option<String> {
+fn normalize_atlas_key(value: &str, images_folder: &Path) -> Option<String> {
     let mut key = value.replace('\\', "/");
     while let Some(stripped) = key.strip_prefix("./") {
         key = stripped.to_string();
@@ -609,10 +616,14 @@ fn normalize_atlas_key(value: &str, images_folder: &PathBuf) -> Option<String> {
         }
     }
 
-    if key.is_empty() { None } else { Some(key) }
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
 }
 
-fn build_exclude_glob(images_folder: &PathBuf, keys: &[String]) -> Option<String> {
+fn build_exclude_glob(images_folder: &Path, keys: &[String]) -> Option<String> {
     let mut patterns = Vec::new();
     for key in keys {
         patterns.extend(build_exclude_patterns(key));
@@ -679,7 +690,7 @@ fn build_exclude_patterns(value: &str) -> Vec<String> {
 }
 
 fn glob_prefix(value: &str) -> &str {
-    match value.find(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']')) {
+    match value.find(|c| ['*', '?', '{', '}', '[', ']'].contains(&c)) {
         Some(index) => &value[..index],
         None => value,
     }
@@ -700,11 +711,11 @@ fn path_ancestors(path: &str) -> Vec<String> {
     ancestors
 }
 
-fn is_images_input(images_folder: &PathBuf, input_prefix: &PathBuf) -> bool {
+fn is_images_input(images_folder: &Path, input_prefix: &Path) -> bool {
     normalize_path_for_compare(images_folder) == normalize_path_for_compare(input_prefix)
 }
 
-fn normalize_path_for_compare(path: &PathBuf) -> String {
+fn normalize_path_for_compare(path: &Path) -> String {
     let mut value = path.to_string_lossy().replace('\\', "/");
     while let Some(stripped) = value.strip_prefix("./") {
         value = stripped.to_string();
@@ -747,21 +758,19 @@ fn normalize_exclude_pattern(value: &str) -> ExcludePattern {
     let mut pattern = trimmed.to_string();
     let has_glob = pattern
         .chars()
-        .any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
+        .any(|c| ['*', '?', '{', '}', '[', ']'].contains(&c));
 
     if !has_glob {
         if pattern.ends_with('/') {
             pattern = format!("{}**/*.png", pattern);
-        } else if !pattern.contains('.') && !pattern.contains('/') {
-            pattern = format!("{}/**/*.png", pattern);
-        } else if !pattern.contains('.') && pattern.contains('/') {
+        } else if !pattern.contains('.') {
             pattern = format!("{}/**/*.png", pattern);
         }
     }
 
     let is_glob = pattern
         .chars()
-        .any(|c| matches!(c, '*' | '?' | '{' | '}' | '[' | ']'));
+        .any(|c| ['*', '?', '{', '}', '[', ']'].contains(&c));
 
     ExcludePattern { pattern, is_glob }
 }
@@ -789,13 +798,11 @@ fn merge_asset_values(
     }
 }
 
-fn sync_subset_nested_prefix(sync_only: &str, images_folder: &PathBuf) -> Option<Vec<String>> {
+fn sync_subset_nested_prefix(sync_only: &str, images_folder: &Path) -> Option<Vec<String>> {
     let images = normalize_path_for_compare(images_folder);
     let mut pattern = sync_only.replace('\\', "/");
     if let Some(rest) = pattern.strip_prefix(&format!("{images}/")) {
         pattern = rest.to_string();
-    } else if pattern == images {
-        return None;
     } else {
         return None;
     }

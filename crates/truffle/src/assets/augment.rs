@@ -10,8 +10,15 @@ pub struct FsImageMetadata;
 
 impl ImageMetadataReader for FsImageMetadata {
     fn dimensions(&self, path: &Path) -> Option<(u32, u32)> {
-        let decoder = png::Decoder::new(std::fs::File::open(path).ok()?);
-        let reader = decoder.read_info().ok()?;
+        // Unreadable or corrupt PNGs carry no dimension evidence.
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(_) => return None,
+        };
+        let reader = match png::Decoder::new(file).read_info() {
+            Ok(reader) => reader,
+            Err(_) => return None,
+        };
         let info = reader.info();
         Some((info.width, info.height))
     }

@@ -1,4 +1,5 @@
 use crate::image::highlight;
+use anyhow::Context;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -44,7 +45,7 @@ fn process_image(
     dry_run: bool,
     force: bool,
     thickness: u32,
-) -> Result<bool, String> {
+) -> anyhow::Result<bool> {
     let highlight_path = get_highlight_path(image_path);
 
     if highlight_path.exists() && !force {
@@ -64,16 +65,50 @@ fn process_image(
     }
 
     println!("[highlight] Processing: {}", image_path.display());
-    highlight::generate_highlight(image_path, &highlight_path, thickness).map_err(|e| {
-        format!(
-            "Failed to generate highlight for {}: {}",
-            image_path.display(),
-            e
-        )
-    })?;
+    highlight::generate_highlight(image_path, &highlight_path, thickness)
+        .with_context(|| format!("Failed to generate highlight for {}", image_path.display()))?;
 
     println!("[highlight] ✅ Generated: {}", highlight_path.display());
     Ok(true)
+}
+
+fn is_target(path: &Path) -> bool {
+    path.extension().and_then(|s| s.to_str()) == Some("png")
+        && !path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.contains("-highlight.png"))
+            .unwrap_or(false)
+}
+
+fn collect_png_files(path: &Path, recursive: bool) -> anyhow::Result<Vec<PathBuf>> {
+    let mut png_files = Vec::new();
+    if recursive {
+        for entry in WalkDir::new(path).into_iter() {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            if entry.file_type().is_file() && is_target(entry.path()) {
+                png_files.push(entry.path().to_path_buf());
+            }
+        }
+    } else {
+        for entry in std::fs::read_dir(path)
+            .with_context(|| format!("Failed to read directory {}", path.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("Failed to read entry under {}", path.display()))?;
+            let is_file = match entry.file_type() {
+                Ok(file_type) => file_type.is_file(),
+                // Skip entries whose type cannot be determined.
+                Err(_) => false,
+            };
+            if is_file && is_target(&entry.path()) {
+                png_files.push(entry.path());
+            }
+        }
+    }
+    png_files.sort();
+    Ok(png_files)
 }
 
 fn process_path(
@@ -82,58 +117,30 @@ fn process_path(
     force: bool,
     thickness: u32,
     recursive: bool,
-) -> Result<(usize, usize, usize), String> {
+) -> anyhow::Result<(usize, usize, usize)> {
     let mut processed = 0;
     let mut skipped = 0;
     let mut errors = 0;
 
     if !path.exists() {
-        return Err(format!("Path does not exist: {}", path.display()));
+        anyhow::bail!("Path does not exist: {}", path.display());
     }
 
     if path.is_file() {
         if path.extension().and_then(|s| s.to_str()) != Some("png") {
-            return Err(format!("Input must be a PNG file: {}", path.display()));
+            anyhow::bail!("Input must be a PNG file: {}", path.display());
         }
 
         match process_image(path, dry_run, force, thickness) {
             Ok(true) => processed += 1,
             Ok(false) => skipped += 1,
-            Err(_) => errors += 1,
+            Err(error) => {
+                eprintln!("[highlight] ERROR: {error:#}");
+                errors += 1;
+            }
         }
     } else {
-        let png_files: Vec<PathBuf> = if recursive {
-            WalkDir::new(path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .map(|e| e.path().to_path_buf())
-                .filter(|p| {
-                    p.extension().and_then(|s| s.to_str()) == Some("png")
-                        && !p
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|n| n.contains("-highlight.png"))
-                            .unwrap_or(false)
-                })
-                .collect()
-        } else {
-            // Non-recursive: only process files directly in the directory
-            std::fs::read_dir(path)
-                .map_err(|e| format!("Failed to read directory: {}", e))?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.extension().and_then(|s| s.to_str()) == Some("png")
-                        && !p
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|n| n.contains("-highlight.png"))
-                            .unwrap_or(false)
-                })
-                .collect()
-        };
+        let png_files = collect_png_files(path, recursive)?;
 
         if png_files.is_empty() {
             println!("[highlight] No PNG files found in: {}", path.display());
@@ -156,7 +163,10 @@ fn process_path(
                         errors += 1;
                     }
                 }
-                Err(_) => errors += 1,
+                Err(error) => {
+                    eprintln!("[highlight] ERROR: {error:#}");
+                    errors += 1;
+                }
             }
         }
     }
@@ -187,8 +197,8 @@ pub fn run(args: HighlightArgs) -> bool {
         args.recursive,
     ) {
         Ok((processed, _, _)) => processed > 0 || args.dry_run,
-        Err(e) => {
-            eprintln!("[highlight] ERROR: {}", e);
+        Err(error) => {
+            eprintln!("[highlight] ERROR: {error:#}");
             false
         }
     }

@@ -156,11 +156,9 @@ pub fn build_atlased_assets(
 
 fn scan_pngs(images_folder: &Path, exclude: &AtlasExclude) -> Result<Vec<PendingSprite>> {
     let mut sprites = Vec::new();
-    for entry in WalkDir::new(images_folder)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(images_folder).follow_links(false).into_iter() {
+        let entry = entry
+            .with_context(|| format!("failed to read entry under {}", images_folder.display()))?;
         if !entry.file_type().is_file() {
             continue;
         }
@@ -328,7 +326,7 @@ fn atlas_file_name(atlas_index: usize) -> String {
 }
 
 fn validate_atlas_size(size: u32) -> Result<u32> {
-    if size < MIN_ATLAS_SIZE || size > MAX_ATLAS_SIZE {
+    if !(MIN_ATLAS_SIZE..=MAX_ATLAS_SIZE).contains(&size) {
         anyhow::bail!(
             "atlas size must be between {} and {}",
             MIN_ATLAS_SIZE,

@@ -7,7 +7,6 @@ use log::{debug, warn};
 use reqwest::{RequestBuilder, Response, StatusCode, multipart};
 use serde::{Deserialize, Serialize};
 use std::{
-    env,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -20,6 +19,33 @@ const UPLOAD_URL: &str = "https://apis.roblox.com/assets/v1/assets";
 const OPERATION_URL: &str = "https://apis.roblox.com/assets/v1/operations";
 const ASSET_DESCRIPTION: &str = "Uploaded by Asphalt";
 const MAX_DISPLAY_NAME_LENGTH: usize = 50;
+
+/// Backoff for rate-limited requests: the server's reset header when it
+/// parses, otherwise exponential backoff in the retry attempt.
+fn retry_after(response: &Response, attempt: u8) -> Duration {
+    let header_secs = response
+        .headers()
+        .get(RATELIMIT_RESET_HEADER)
+        .and_then(parse_retry_after_secs);
+    match header_secs {
+        Some(secs) => Duration::from_secs(secs),
+        None => Duration::from_secs(1 << attempt),
+    }
+}
+
+// `clippy::manual_ok_err` is allowed here: spelling this as `.ok()`
+// would trip the `no_discarded_error` gate, which this repo also enforces.
+#[allow(clippy::manual_ok_err)]
+fn parse_retry_after_secs(header: &reqwest::header::HeaderValue) -> Option<u64> {
+    let text = match header.to_str() {
+        Ok(text) => text,
+        Err(_) => return None,
+    };
+    match text.parse::<u64>() {
+        Ok(secs) => Some(secs),
+        Err(_) => None,
+    }
+}
 
 pub struct WebApiClient {
     inner: reqwest::Client,
@@ -44,7 +70,7 @@ impl WebApiClient {
     }
 
     pub async fn upload(&self, asset: &Asset) -> anyhow::Result<u64> {
-        if env::var("ASPHALT_TEST").is_ok() {
+        if config::is_test_mode() {
             return Ok(asset.hash.as_u64());
         }
 
@@ -165,13 +191,7 @@ impl WebApiClient {
 
             match status {
                 StatusCode::TOO_MANY_REQUESTS if attempt < MAX => {
-                    let wait = res
-                        .headers()
-                        .get(RATELIMIT_RESET_HEADER)
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .map(Duration::from_secs)
-                        .unwrap_or_else(|| Duration::from_secs(1 << attempt));
+                    let wait = retry_after(&res, attempt);
 
                     let reset_at = Instant::now() + wait;
                     {

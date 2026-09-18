@@ -46,9 +46,11 @@ pub fn copy_runtime(out_dir: &Path) -> anyhow::Result<()> {
     for file in RUNTIME_FILES {
         let path = out_dir.join(file.name);
         if path.exists() {
-            let existing = fs::read_to_string(&path).unwrap_or_default();
-            if existing == file.contents {
-                continue;
+            // Unreadable existing files fall through and are rewritten below.
+            if let Ok(existing) = fs::read_to_string(&path) {
+                if existing == file.contents {
+                    continue;
+                }
             }
         }
         fs::write(&path, file.contents)

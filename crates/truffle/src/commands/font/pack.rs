@@ -105,7 +105,7 @@ pub fn pack_glyphs(sizes: &[(u32, u32)], padding: u32, atlas_size: u32) -> Resul
 pub fn validate_atlas_size(size: u32) -> Result<u32> {
     const MIN: u32 = 256;
     const MAX: u32 = 4096;
-    if size < MIN || size > MAX {
+    if !(MIN..=MAX).contains(&size) {
         anyhow::bail!("atlas size must be between {MIN} and {MAX}");
     }
     if !size.is_power_of_two() {
@@ -118,7 +118,10 @@ pub fn page_png_path(base: &std::path::Path, page: u32, page_count: u32) -> std:
     if page_count <= 1 {
         return base.to_path_buf();
     }
-    let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let parent = match base.parent() {
+        Some(parent) => parent,
+        None => std::path::Path::new("."),
+    };
     let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("font");
     let ext = base.extension().and_then(|s| s.to_str()).unwrap_or("png");
     parent.join(format!("{stem}_{page}.{ext}"))

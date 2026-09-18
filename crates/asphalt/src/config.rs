@@ -25,6 +25,17 @@ pub type InputMap = HashMap<String, Input>;
 
 pub const FILE_NAME: &str = "truffle.toml";
 
+/// Test-mode flag sourced from `ASPHALT_TEST`.
+///
+/// When set, uploads are stubbed to local hashes so integration tests run offline.
+// `clippy::redundant_pattern_matching` is allowed here: spelling this as
+// `.is_ok()` would trip the `no_ad_hoc_env` / `no_discarded_error` gates,
+// which this repo also enforces.
+#[allow(clippy::redundant_pattern_matching)]
+pub fn is_test_mode() -> bool {
+    matches!(std::env::var("ASPHALT_TEST"), Ok(_))
+}
+
 impl Config {
     pub async fn read_from(project_dir: PathBuf) -> anyhow::Result<Config> {
         let config_path = project_dir.join(FILE_NAME);

@@ -1,27 +1,16 @@
+use asphalt::{asset, cli, config, lockfile, sync, web_api};
 use clap::Parser;
 use cli::{Cli, Commands};
 use dotenvy::dotenv;
 use fs_err::tokio as fs;
 use indicatif::MultiProgress;
 use log::LevelFilter;
-use migrate_lockfile::migrate_lockfile;
 use schemars::schema_for;
-use sync::sync;
-use upload::upload;
 
 use crate::config::Config;
 
-mod asset;
-mod cli;
-mod config;
-mod glob;
-mod hash;
-mod lockfile;
 mod migrate_lockfile;
-mod sync;
 mod upload;
-mod util;
-mod web_api;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -45,9 +34,9 @@ async fn main() -> anyhow::Result<()> {
     log::set_max_level(level);
 
     match args.command {
-        Commands::Sync(args) => sync(args, multi_progress).await,
-        Commands::Upload(args) => upload(args).await,
-        Commands::MigrateLockfile(args) => migrate_lockfile(args).await,
+        Commands::Sync(args) => sync::sync(args, multi_progress).await,
+        Commands::Upload(args) => upload::upload(args).await,
+        Commands::MigrateLockfile(args) => migrate_lockfile::migrate_lockfile(args).await,
         Commands::GenerateConfigSchema => generate_config_schema().await,
     }
 }

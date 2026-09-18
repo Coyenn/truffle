@@ -1,3 +1,4 @@
+use anyhow::Context;
 use image::{Rgba, RgbaImage};
 use std::path::Path;
 
@@ -12,17 +13,17 @@ pub fn default_grass_colors() -> Vec<[u8; 3]> {
     DEFAULT_GRASS_COLORS.to_vec()
 }
 
-pub fn load_sample_colors(sample_path: &Path) -> Result<Vec<[u8; 3]>, String> {
+pub fn load_sample_colors(sample_path: &Path) -> anyhow::Result<Vec<[u8; 3]>> {
     let sample = image::open(sample_path)
-        .map_err(|e| format!("Failed to read sample {}: {}", sample_path.display(), e))?
+        .with_context(|| format!("Failed to read sample {}", sample_path.display()))?
         .to_rgba8();
     let colors = collect_visible_colors(&sample);
 
     if colors.is_empty() {
-        return Err(format!(
+        anyhow::bail!(
             "Sample image contains no visible colors: {}",
             sample_path.display()
-        ));
+        );
     }
 
     Ok(colors)
@@ -32,20 +33,20 @@ pub fn generate_grass_variant(
     input_path: &Path,
     output_path: &Path,
     colors: &[[u8; 3]],
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if colors.is_empty() {
-        return Err("Terrain palette contains no colors".into());
+        anyhow::bail!("Terrain palette contains no colors");
     }
 
     let source = image::open(input_path)
-        .map_err(|e| format!("Failed to read image {}: {}", input_path.display(), e))?
+        .with_context(|| format!("Failed to read image {}", input_path.display()))?
         .to_rgba8();
     let seed = input_path.to_string_lossy();
     let output = build_grass_variant(&source, colors, seed.as_ref());
 
     output
         .save(output_path)
-        .map_err(|e| format!("Failed to write image {}: {}", output_path.display(), e))
+        .with_context(|| format!("Failed to write image {}", output_path.display()))
 }
 
 fn collect_visible_colors(image: &RgbaImage) -> Vec<[u8; 3]> {
@@ -204,6 +205,8 @@ mod tests {
         let err = load_sample_colors(&path).unwrap_err();
         fs::remove_file(&path).unwrap();
 
-        assert!(err.contains("Sample image contains no visible colors"));
+        assert!(err
+            .to_string()
+            .contains("Sample image contains no visible colors"));
     }
 }

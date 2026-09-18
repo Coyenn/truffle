@@ -82,7 +82,10 @@ fn pair_kern_px(
         };
         let gap = left_advance + (right.xmin as f32 + r_left as f32)
             - (left.xmin as f32 + l_right as f32 + 1.0);
-        min_gap = Some(min_gap.map_or(gap, |g| g.min(gap)));
+        min_gap = Some(match min_gap {
+            Some(previous) => previous.min(gap),
+            None => gap,
+        });
     }
     let min_gap = min_gap?;
     Some(-(min_gap - target_gap))
@@ -182,6 +185,6 @@ mod tests {
     #[test]
     fn empty_profiles_yield_zero_matrix() {
         let classes = build_kerning_classes(&['A', 'V'], &HashMap::new(), &[10.0, 10.0], 1);
-        assert_eq!(classes.matrix.iter().all(|&v| v == 0.0), true);
+        assert!(classes.matrix.iter().all(|&v| v == 0.0));
     }
 }

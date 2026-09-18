@@ -11,12 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use self::kerning::build_kerning_classes;
-use self::meta_v2::{AtlasPageMeta, float_luau};
-use self::meta_v2::{FontMetaV2, GlyphLayerMeta, render_font_meta_dts, serialize_font_meta_luau};
-use self::pack::{PackRect, pack_glyphs, validate_atlas_size, write_atlas_pages};
+use self::meta_v2::{float_luau, AtlasPageMeta};
+use self::meta_v2::{render_font_meta_dts, serialize_font_meta_luau, FontMetaV2, GlyphLayerMeta};
+use self::pack::{pack_glyphs, validate_atlas_size, write_atlas_pages, PackRect};
 use self::raster::{
-    InkProfile, binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
-    ink_profile_from_alpha,
+    binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
+    ink_profile_from_alpha, InkProfile,
 };
 
 #[derive(Parser, Debug)]
@@ -132,10 +132,13 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         anyhow::bail!("charset must not be empty");
     }
 
-    let px = args.px.unwrap_or_else(|| {
-        let pad = args.padding.saturating_mul(2) as f32;
-        (args.line_height as f32 - pad).max(1.0)
-    });
+    let px = match args.px {
+        Some(px) => px,
+        None => {
+            let pad = args.padding.saturating_mul(2) as f32;
+            (args.line_height as f32 - pad).max(1.0)
+        }
+    };
     if px <= 0.0 {
         anyhow::bail!("--px must be > 0");
     }
@@ -179,7 +182,6 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         (-min_ymin) as f32
     };
     let baseline = baseline_offset.round().max(0.0) as u32;
-    let inner = args.line_height.saturating_sub(2 * args.padding) as f32;
     // Legacy marzipan cell fonts used ~21px from line top at lineHeight 95 / px 121 / padding 5.
     let layout_baseline = layout_baseline_for(args.line_height, args.padding, px);
 
@@ -261,11 +263,10 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
     write_atlas_pages(&atlases, &args.output_png)?;
 
     let outline_png_path = if outline_enabled {
-        Some(
-            args.outline_png
-                .clone()
-                .unwrap_or_else(|| derive_outline_png_path(&args.output_png)),
-        )
+        Some(match args.outline_png.clone() {
+            Some(path) => path,
+            None => derive_outline_png_path(&args.output_png),
+        })
     } else {
         None
     };
@@ -308,16 +309,22 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         outline: outline_layer,
     };
 
-    let luau_path = args.luau.clone().unwrap_or_else(|| {
-        let mut p = args.output_png.clone();
-        p.set_extension("luau");
-        p
-    });
-    let dts_path = args.dts.clone().unwrap_or_else(|| {
-        let mut p = args.output_png.clone();
-        p.set_extension("d.ts");
-        p
-    });
+    let luau_path = match args.luau.clone() {
+        Some(path) => path,
+        None => {
+            let mut p = args.output_png.clone();
+            p.set_extension("luau");
+            p
+        }
+    };
+    let dts_path = match args.dts.clone() {
+        Some(path) => path,
+        None => {
+            let mut p = args.output_png.clone();
+            p.set_extension("d.ts");
+            p
+        }
+    };
 
     fs::write(&luau_path, serialize_font_meta_luau(&meta)).map_err(|e| {
         anyhow::anyhow!("failed to write Luau metadata {}: {e}", luau_path.display())
@@ -429,7 +436,10 @@ fn glyph_offset_y(line_height: f32, glyph_height: f32, layout_baseline: f32, ymi
 }
 
 fn derive_outline_png_path(base_png: &Path) -> PathBuf {
-    let parent = base_png.parent().unwrap_or_else(|| Path::new("."));
+    let parent = match base_png.parent() {
+        Some(parent) => parent,
+        None => Path::new("."),
+    };
     let stem = base_png
         .file_stem()
         .and_then(|s| s.to_str())

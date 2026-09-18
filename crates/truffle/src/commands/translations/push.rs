@@ -1,11 +1,11 @@
 use super::api::{self, EntryOperationLimits, LocalizationClient, PatchEntry, RemoteEntry};
+use super::config::{LexiAuthToken, UniverseId};
 use super::lexicon::{LexiconEntry, LoadedLexicon};
 use super::ui::{DedupeSummary, DiffSummary, PushPhase, PushUi, VerifyResult};
 use clap::Parser;
 use dotenvy::dotenv;
 use log::{error, warn};
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -41,12 +41,11 @@ pub fn run(args: PushArgs) -> bool {
 }
 
 fn run_impl(args: PushArgs) -> anyhow::Result<()> {
-    let api_key = env::var("LEXI_AUTH_TOKEN").ok();
-    let game_id = args.game_id.or_else(|| {
-        env::var("ROBLOX_UNIVERSE_ID")
-            .ok()
-            .and_then(|v| v.parse().ok())
-    });
+    let api_key = LexiAuthToken::from_env().map(LexiAuthToken::into_inner);
+    let game_id = match args.game_id {
+        Some(id) => Some(id),
+        None => UniverseId::from_env().map(UniverseId::into_inner),
+    };
 
     let lexicon_loaded = if let Some(path) = &args.lexicon_path {
         Some(super::lexicon::load_lexicon(path)?)
@@ -129,6 +128,10 @@ fn run_impl(args: PushArgs) -> anyhow::Result<()> {
 
     let (entry_limits, max_entries_per_update) = client.fetch_limits();
     let max_create_entries_per_update = client.max_create_entries_per_update();
+    let batch_sizes = UpdateBatchSizes {
+        max_entries_per_update,
+        max_create_entries_per_update,
+    };
     warn_if_context_too_long(&create_entries, &entry_limits);
 
     let create_entries = partition_create_batches(&create_entries, &entry_limits);
@@ -141,8 +144,7 @@ fn run_impl(args: PushArgs) -> anyhow::Result<()> {
         &delete_entries,
         PushPhase::Delete,
         false,
-        max_entries_per_update,
-        max_create_entries_per_update,
+        batch_sizes,
         &mut PushState {
             failed_keys: &mut failed_keys,
             modified_count: &mut modified_count,
@@ -154,8 +156,7 @@ fn run_impl(args: PushArgs) -> anyhow::Result<()> {
         &create_entries,
         PushPhase::Create,
         true,
-        max_entries_per_update,
-        max_create_entries_per_update,
+        batch_sizes,
         &mut PushState {
             failed_keys: &mut failed_keys,
             modified_count: &mut modified_count,
@@ -166,11 +167,11 @@ fn run_impl(args: PushArgs) -> anyhow::Result<()> {
         anyhow::bail!("failed to push {} keys", failed_keys.len());
     }
 
-    let verify = if lexicon_required.is_some() {
+    let verify = if let Some(required) = lexicon_required.as_ref() {
         let (remote_after_entries, remote_after) =
             ui.with_fetch_spinner(|| client.fetch_remote_entries())?;
         Some(verify_push(
-            lexicon_required.as_ref().unwrap(),
+            required,
             &remote_after_entries,
             remote_after,
             remote_before,
@@ -326,7 +327,7 @@ fn push_entries(
 
     if entries.len() == 1 {
         let reason = failure_reason(&body.failed_entries_and_translations[0]);
-        mark_failed(&entries[0].identifier.key, failed_keys, reason);
+        mark_failed(&entries[0].identifier.key, failed_keys, &reason);
         return Ok(());
     }
 
@@ -370,12 +371,15 @@ fn count_modified(entries: &[PatchEntry], body: &api::PatchResponse, modified_co
     }
 }
 
-fn failure_reason(failure: &api::FailedEntry) -> &str {
-    failure
-        .error
-        .as_ref()
+fn failure_reason(failure: &api::FailedEntry) -> String {
+    let error = failure.error.as_ref();
+    let message = error
         .and_then(|error| error.error_message.as_deref())
-        .unwrap_or("unknown error")
+        .unwrap_or("unknown error");
+    match error.and_then(|error| error.error_code) {
+        Some(code) => format!("error {code}: {message}"),
+        None => message.to_string(),
+    }
 }
 
 fn exceeds_context_limit(entry: &PatchEntry, limits: &EntryOperationLimits) -> bool {
@@ -427,14 +431,19 @@ struct PushState<'a> {
     modified_count: &'a mut usize,
 }
 
+#[derive(Clone, Copy)]
+struct UpdateBatchSizes {
+    max_entries_per_update: usize,
+    max_create_entries_per_update: usize,
+}
+
 fn do_batched_requests(
     ui: &PushUi,
     client: &LocalizationClient,
     entries: &[PatchEntry],
     phase: PushPhase,
     expect_modifications: bool,
-    max_entries_per_update: usize,
-    max_create_entries_per_update: usize,
+    sizes: UpdateBatchSizes,
     state: &mut PushState<'_>,
 ) -> anyhow::Result<()> {
     let total_entries = entries.len();
@@ -443,9 +452,9 @@ fn do_batched_requests(
     }
 
     let batch_size = if expect_modifications {
-        max_create_entries_per_update
+        sizes.max_create_entries_per_update
     } else {
-        max_entries_per_update
+        sizes.max_entries_per_update
     };
     let batch_count = total_entries.div_ceil(batch_size);
     let progress = ui.begin_push(phase, total_entries);

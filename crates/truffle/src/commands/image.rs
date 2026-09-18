@@ -1,6 +1,7 @@
 pub use crate::commands::highlight::{run as highlight_run, HighlightArgs};
 pub use crate::commands::palette::{run as palette_run, PaletteArgs};
 pub use crate::commands::project::{run as project_run, ProjectArgs};
+pub use crate::commands::snap::{run as snap_run, SnapArgs};
 pub use crate::commands::terrain::{run as terrain_run, TerrainArgs};
 
 use clap::Subcommand;
@@ -13,6 +14,8 @@ pub enum ImageCommands {
     Palette(PaletteArgs),
     /// Project a PNG through a self-contained coordinate and shading map
     Project(ProjectArgs),
+    /// Snap messy or off-grid pixels back to a crisp pixel-art grid
+    Snap(SnapArgs),
     /// Generate grass integration PNG overlays
     Terrain(TerrainArgs),
 }
@@ -22,6 +25,7 @@ pub fn run(command: ImageCommands) -> bool {
         ImageCommands::Highlight(args) => highlight_run(args),
         ImageCommands::Palette(args) => palette_run(args),
         ImageCommands::Project(args) => project_run(args),
+        ImageCommands::Snap(args) => snap_run(args),
         ImageCommands::Terrain(args) => terrain_run(args),
     }
 }

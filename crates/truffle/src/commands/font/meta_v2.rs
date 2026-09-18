@@ -32,11 +32,11 @@ pub fn serialize_font_meta_luau(meta: &FontMetaV2) -> String {
     s.push_str("-- DO NOT EDIT MANUALLY.\n\n");
     s.push_str("local font = ");
     s.push_str(&serialize_meta_table(meta, false));
-    s.push_str("\n");
+    s.push('\n');
     if meta.outline.is_some() {
         s.push_str("local outline = ");
         s.push_str(&serialize_outline_table(meta));
-        s.push_str("\n");
+        s.push('\n');
     }
     s.push_str("return {\n\tfont = font,\n");
     if meta.outline.is_some() {

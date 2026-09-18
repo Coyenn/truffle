@@ -1,31 +1,32 @@
-use super::model::{AssetValue, convert_map_to_asset_meta};
+use super::model::{convert_map_to_asset_meta, AssetValue};
+use anyhow::Context;
 use full_moon::{ast, tokenizer::TokenType};
 use serde_json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-pub fn load_assets(path: &Path) -> Result<BTreeMap<String, AssetValue>, String> {
-    let content =
-        fs::read_to_string(path).map_err(|e| format!("Failed to read assets file: {}", e))?;
+pub fn load_assets(path: &Path) -> anyhow::Result<BTreeMap<String, AssetValue>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read assets file {}", path.display()))?;
 
     if path.extension().and_then(|s| s.to_str()) == Some("json") {
-        let json_value: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
-        return parse_json_value(json_value);
+        let assets: BTreeMap<String, AssetValue> = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse JSON assets {}", path.display()))?;
+        return Ok(assets);
     }
 
     parse_luau_assets_module(&content)
 }
 
-fn parse_luau_assets_module(content: &str) -> Result<BTreeMap<String, AssetValue>, String> {
+fn parse_luau_assets_module(content: &str) -> anyhow::Result<BTreeMap<String, AssetValue>> {
     let ast = full_moon::parse(content).map_err(|errors| {
         let details = errors
             .iter()
             .map(|e| format!("{:?}", e))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("Failed to parse Luau: {}", details)
+        anyhow::anyhow!("Failed to parse Luau: {}", details)
     })?;
 
     let block = ast.nodes();
@@ -42,7 +43,7 @@ fn parse_luau_assets_module(content: &str) -> Result<BTreeMap<String, AssetValue
         return convert_table_to_asset_value(table);
     }
 
-    Err("Could not find assets table in Luau file".to_string())
+    anyhow::bail!("Could not find assets table in Luau file")
 }
 
 fn find_direct_return_table(block: &ast::Block) -> Option<&ast::TableConstructor> {
@@ -55,8 +56,8 @@ fn find_direct_return_table(block: &ast::Block) -> Option<&ast::TableConstructor
                             return Some(table);
                         }
                     }
-                    ast::Expression::Var(var) => {
-                        if let Some(table) = resolve_local_table(block, var) {
+                    ast::Expression::Var(variable) => {
+                        if let Some(table) = resolve_local_table(block, variable) {
                             if looks_like_asset_table(table) {
                                 return Some(table);
                             }
@@ -72,6 +73,18 @@ fn find_direct_return_table(block: &ast::Block) -> Option<&ast::TableConstructor
 }
 
 fn looks_like_asset_table(table: &ast::TableConstructor) -> bool {
+    // `clippy::manual_ok_err` is allowed below: spelling the key parse as
+    // `.ok()` would trip the `no_discarded_error` gate, which this repo
+    // also enforces.
+    #[allow(clippy::manual_ok_err)]
+    fn string_key(key: &ast::Expression) -> Option<String> {
+        match extract_string_value(key) {
+            Ok(key) => Some(key),
+            // Skip keys with unparseable quotes; the table scan is best-effort.
+            Err(_) => None,
+        }
+    }
+
     // Asphalt-generated Luau returns a table whose keys are file names.
     // We only accept this format if it contains at least one key that looks like an asset file.
     const EXTENSIONS: [&str; 5] = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
@@ -80,7 +93,7 @@ fn looks_like_asset_table(table: &ast::TableConstructor) -> bool {
         let key = match field {
             ast::Field::NameKey { key, .. } => Some(key.to_string().trim().to_string()),
             ast::Field::ExpressionKey { key, .. } => match key {
-                ast::Expression::String(_) => extract_string_value(key).ok(),
+                ast::Expression::String(_) => string_key(key),
                 _ => None,
             },
             _ => None,
@@ -134,8 +147,8 @@ fn find_assets_table_in_return(block: &ast::Block) -> Option<&ast::TableConstruc
                             return Some(inner);
                         }
                     }
-                    ast::Expression::Var(var) => {
-                        if let Some(table) = resolve_assets_var(block, var) {
+                    ast::Expression::Var(variable) => {
+                        if let Some(table) = resolve_assets_var(block, variable) {
                             return Some(table);
                         }
                     }
@@ -157,7 +170,7 @@ fn find_assets_table_in_table<'a>(
             if key.to_string().trim() == "assets" {
                 return match value {
                     ast::Expression::TableConstructor(inner) => Some(inner),
-                    ast::Expression::Var(var) => resolve_assets_var(block, var),
+                    ast::Expression::Var(variable) => resolve_assets_var(block, variable),
                     _ => None,
                 };
             }
@@ -168,9 +181,9 @@ fn find_assets_table_in_table<'a>(
 
 fn resolve_assets_var<'a>(
     block: &'a ast::Block,
-    var: &'a ast::Var,
+    variable: &'a ast::Var,
 ) -> Option<&'a ast::TableConstructor> {
-    if let ast::Var::Name(name_ref) = var {
+    if let ast::Var::Name(name_ref) = variable {
         if name_ref.to_string().trim() == "assets" {
             return find_local_assets_table(block);
         }
@@ -180,9 +193,9 @@ fn resolve_assets_var<'a>(
 
 fn resolve_local_table<'a>(
     block: &'a ast::Block,
-    var: &'a ast::Var,
+    variable: &'a ast::Var,
 ) -> Option<&'a ast::TableConstructor> {
-    if let ast::Var::Name(name_ref) = var {
+    if let ast::Var::Name(name_ref) = variable {
         let name = name_ref.to_string();
         return find_local_table_named(block, name.trim());
     }
@@ -191,7 +204,7 @@ fn resolve_local_table<'a>(
 
 fn convert_table_to_asset_value(
     table: &ast::TableConstructor,
-) -> Result<BTreeMap<String, AssetValue>, String> {
+) -> anyhow::Result<BTreeMap<String, AssetValue>> {
     let mut result = BTreeMap::new();
 
     for field in table.fields() {
@@ -199,8 +212,11 @@ fn convert_table_to_asset_value(
             ast::Field::NameKey { key, value, .. } => (key.to_string().trim().to_string(), value),
             ast::Field::ExpressionKey { key, value, .. } => {
                 let key_str = match key {
-                    ast::Expression::String(_) => extract_string_value(key)
-                        .unwrap_or_else(|_| key.to_string().trim().to_string()),
+                    ast::Expression::String(_) => match extract_string_value(key) {
+                        Ok(key_str) => key_str,
+                        // Fall back to the raw token text when quote parsing fails.
+                        Err(_) => key.to_string().trim().to_string(),
+                    },
                     _ => key.to_string().trim().to_string(),
                 };
                 (key_str, value)
@@ -216,7 +232,7 @@ fn convert_table_to_asset_value(
     Ok(result)
 }
 
-fn extract_string_value(expr: &ast::Expression) -> Result<String, String> {
+fn extract_string_value(expr: &ast::Expression) -> anyhow::Result<String> {
     if let ast::Expression::String(token_ref) = expr {
         if let TokenType::StringLiteral { literal, .. } = token_ref.token().token_type() {
             return Ok(literal.to_string());
@@ -230,29 +246,29 @@ fn extract_string_value(expr: &ast::Expression) -> Result<String, String> {
             .to_string());
     }
 
-    Err("Expression is not a string literal".to_string())
+    anyhow::bail!("Expression is not a string literal")
 }
 
-fn extract_number_value(expr: &ast::Expression) -> Result<f64, String> {
+fn extract_number_value(expr: &ast::Expression) -> anyhow::Result<f64> {
     if let ast::Expression::Number(token_ref) = expr {
         if let TokenType::Number { text } = token_ref.token().token_type() {
             let numeric_text = text.to_string();
             return numeric_text
                 .parse::<f64>()
-                .map_err(|e| format!("Failed to parse number '{}': {}", numeric_text, e));
+                .with_context(|| format!("Failed to parse number '{}'", numeric_text));
         }
 
         let fallback = token_ref.to_string();
         return fallback
             .trim()
             .parse::<f64>()
-            .map_err(|e| format!("Failed to parse number '{}': {}", fallback.trim(), e));
+            .with_context(|| format!("Failed to parse number '{}'", fallback.trim()));
     }
 
-    Err("Expression is not a numeric literal".to_string())
+    anyhow::bail!("Expression is not a numeric literal")
 }
 
-fn convert_expr_to_asset_value(expr: &ast::Expression) -> Result<AssetValue, String> {
+fn convert_expr_to_asset_value(expr: &ast::Expression) -> anyhow::Result<AssetValue> {
     match expr {
         ast::Expression::String(_) => {
             let unquoted = extract_string_value(expr)?;
@@ -270,42 +286,7 @@ fn convert_expr_to_asset_value(expr: &ast::Expression) -> Result<AssetValue, Str
                 Ok(AssetValue::Table(map))
             }
         }
-        _ => Err(format!("Unsupported expression type: {:?}", expr)),
-    }
-}
-
-fn parse_json_value(value: serde_json::Value) -> Result<BTreeMap<String, AssetValue>, String> {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut result = BTreeMap::new();
-            for (k, v) in map {
-                result.insert(k, parse_json_value_to_asset(v)?);
-            }
-            Ok(result)
-        }
-        _ => Err("Expected object at root".to_string()),
-    }
-}
-
-fn parse_json_value_to_asset(value: serde_json::Value) -> Result<AssetValue, String> {
-    match value {
-        serde_json::Value::String(s) => Ok(AssetValue::String(s)),
-        serde_json::Value::Number(n) => Ok(AssetValue::Number(n.as_f64().unwrap_or(0.0))),
-        serde_json::Value::Object(map) => {
-            if map.contains_key("id") {
-                Ok(AssetValue::Object(
-                    serde_json::from_value(serde_json::Value::Object(map))
-                        .map_err(|e| format!("Failed to parse AssetMeta: {}", e))?,
-                ))
-            } else {
-                let mut result = BTreeMap::new();
-                for (k, v) in map {
-                    result.insert(k, parse_json_value_to_asset(v)?);
-                }
-                Ok(AssetValue::Table(result))
-            }
-        }
-        _ => Err("Unsupported value type".to_string()),
+        _ => anyhow::bail!("Unsupported expression type: {:?}", expr),
     }
 }
 
@@ -394,16 +375,37 @@ return {
 
     #[test]
     fn parse_json_assets() {
-        let assets = parse_json_value(serde_json::json!({
-            "category": {
-                "item": "foo"
-            }
-        }))
-        .unwrap();
+        let assets: BTreeMap<String, AssetValue> =
+            serde_json::from_str(r#"{ "category": { "item": "foo" } }"#).unwrap();
         if let AssetValue::Table(category) = &assets["category"] {
             assert_eq!(category["item"], AssetValue::String("foo".into()));
         } else {
             panic!("Expected table");
         }
+    }
+
+    #[test]
+    fn parse_json_asset_meta() {
+        let assets: BTreeMap<String, AssetValue> = serde_json::from_str(
+            r#"{ "logo": { "id": "rbxassetid://1", "width": 16, "height": 16 } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            assets["logo"],
+            AssetValue::Object(super::super::model::AssetMeta {
+                id: "rbxassetid://1".into(),
+                width: Some(16),
+                height: Some(16),
+                rect_x: None,
+                rect_y: None,
+                rect_w: None,
+                rect_h: None,
+                highlight_id: None,
+                highlight_rect_x: None,
+                highlight_rect_y: None,
+                highlight_rect_w: None,
+                highlight_rect_h: None,
+            })
+        );
     }
 }

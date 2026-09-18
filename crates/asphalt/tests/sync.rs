@@ -20,10 +20,10 @@ fn hash_as_asset_id(path: &ChildPath) -> i64 {
     u64::from_be_bytes(bytes) as i64
 }
 
-fn toml_eq(expected: toml::Value) -> impl Predicate<Path> {
+fn toml_eq(expected: toml::Table) -> impl Predicate<Path> {
     predicate::function(move |path: &Path| {
         let contents = fs::read_to_string(path).unwrap();
-        let actual: toml::Value = toml::from_str(&contents).unwrap();
+        let actual: toml::Table = toml::from_str(&contents).unwrap();
         actual == expected
     })
 }
@@ -124,7 +124,7 @@ fn cloud_output_and_lockfile() {
             inputs.into()
         });
 
-        table.into()
+        table
     }));
 }
 
@@ -378,5 +378,5 @@ fn brace_glob_sync_does_not_wipe_lockfile() {
     project
         .dir
         .child("truffle.lock.toml")
-        .assert(toml_eq(expected.into()));
+        .assert(toml_eq(expected));
 }

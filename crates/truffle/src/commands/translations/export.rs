@@ -42,9 +42,10 @@ fn run_impl(args: ExportArgs) -> Result<()> {
         csv.push_str(&csv_record(&[key, &entry.source, &context, ""]));
     }
 
-    let output = args
-        .output
-        .unwrap_or_else(|| args.lexicon_path.with_extension("csv"));
+    let output = match args.output {
+        Some(path) => path,
+        None => args.lexicon_path.with_extension("csv"),
+    };
 
     if output.as_os_str() == "-" {
         io::stdout()

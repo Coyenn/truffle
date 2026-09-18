@@ -1,4 +1,5 @@
 mod api;
+mod config;
 mod export;
 mod lexicon;
 mod push;
