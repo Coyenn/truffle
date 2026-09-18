@@ -9,6 +9,7 @@ use fontdue::Metrics;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use truffle_config::FontPreset;
 
 use self::kerning::build_kerning_classes;
 use self::meta_v2::{float_luau, AtlasPageMeta};
@@ -18,6 +19,14 @@ use self::raster::{
     binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
     ink_profile_from_alpha, InkProfile,
 };
+
+/// Built-in charset used when neither `--charset` nor truffle.toml `[font] charset` is set.
+pub const DEFAULT_CHARSET: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+
+const DEFAULT_PADDING: u32 = 1;
+const DEFAULT_LINE_HEIGHT: u32 = 95;
+const DEFAULT_MAX_ATLAS_SIZE: u32 = 1024;
+const DEFAULT_KERNING_GAP: u32 = 6;
 
 #[derive(Parser, Debug)]
 #[command(about = "Generate an image atlas from a .ttf font")]
@@ -30,36 +39,33 @@ pub struct FontArgs {
     #[arg(value_name = "OUTPUT_PNG")]
     pub output_png: PathBuf,
 
-    /// Padding in pixels around each glyph in the atlas
-    #[arg(long, default_value = "1")]
-    pub padding: u32,
+    /// Padding in pixels around each glyph in the atlas (defaults to truffle.toml [font] `padding`)
+    #[arg(long)]
+    pub padding: Option<u32>,
 
-    /// Charset string; glyphs are packed in this order
-    #[arg(
-        long,
-        default_value = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-    )]
-    pub charset: String,
+    /// Charset string; glyphs are packed in this order (defaults to truffle.toml [font] `charset`)
+    #[arg(long)]
+    pub charset: Option<String>,
 
     /// Path to a UTF-8 text file containing the charset (overrides --charset when set)
     #[arg(long, value_name = "PATH")]
     pub charset_file: Option<PathBuf>,
 
-    /// Rasterization pixel size (fontdue px)
+    /// Rasterization pixel size, fontdue px (defaults to truffle.toml [font] `px`, else derived)
     #[arg(long)]
     pub px: Option<f32>,
 
-    /// Design line height in pixels (layout reference size)
-    #[arg(long, default_value = "95")]
-    pub line_height: u32,
+    /// Design line height in pixels, layout reference size (defaults to truffle.toml [font] `line_height`)
+    #[arg(long)]
+    pub line_height: Option<u32>,
 
-    /// Maximum atlas page size (square, power of two)
-    #[arg(long, default_value = "1024")]
-    pub max_atlas_size: u32,
+    /// Maximum atlas page size, square power of two (defaults to truffle.toml [font] `max_atlas_size`)
+    #[arg(long)]
+    pub max_atlas_size: Option<u32>,
 
-    /// Target minimum ink gap for kerning class generation
-    #[arg(long, default_value = "6")]
-    pub kerning_gap: u32,
+    /// Target minimum ink gap for kerning class generation (defaults to truffle.toml [font] `kerning_gap`)
+    #[arg(long)]
+    pub kerning_gap: Option<u32>,
 
     /// Output Luau metadata module path. Defaults to OUTPUT_PNG with .luau extension.
     #[arg(long, value_name = "OUTPUT_LUAU")]
@@ -75,8 +81,8 @@ pub struct FontArgs {
 
     /// Generate an outline (thicker fill) variant by dilating glyph alpha by this many pixels.
     /// 0 disables outline generation.
-    #[arg(long, default_value = "0", value_name = "PX")]
-    pub outline: u32,
+    #[arg(long, value_name = "PX")]
+    pub outline: Option<u32>,
 
     /// Output PNG atlas path for the outline variant. Defaults to OUTPUT_PNG with `_outline` suffix.
     #[arg(long, value_name = "OUTPUT_OUTLINE_PNG")]
@@ -88,11 +94,72 @@ pub struct FontArgs {
 }
 
 pub fn run(args: FontArgs) -> bool {
+    // The [font] preset is best-effort: `truffle font` also works standalone
+    // without a truffle.toml, and CLI flags always win over the preset.
+    let preset = FontPreset::read_blocking();
+    let args = ResolvedFontArgs::resolve(args, &preset);
     match run_impl(args) {
         Ok(()) => true,
         Err(e) => {
             eprintln!("[font] ERROR: {e}");
             false
+        }
+    }
+}
+
+/// `FontArgs` with every `[font]`-backed option resolved.
+///
+/// Resolution order per option: CLI flag, then truffle.toml `[font]`, then
+/// the built-in default. Field names mirror `FontArgs` so the pipeline body
+/// reads unchanged.
+struct ResolvedFontArgs {
+    input_ttf: PathBuf,
+    output_png: PathBuf,
+    padding: u32,
+    charset: String,
+    charset_file: Option<PathBuf>,
+    px: Option<f32>,
+    line_height: u32,
+    max_atlas_size: u32,
+    kerning_gap: u32,
+    luau: Option<PathBuf>,
+    dts: Option<PathBuf>,
+    runtime_out: Option<PathBuf>,
+    outline: u32,
+    outline_png: Option<PathBuf>,
+    no_antialias: bool,
+}
+
+impl ResolvedFontArgs {
+    fn resolve(args: FontArgs, preset: &FontPreset) -> Self {
+        Self {
+            input_ttf: args.input_ttf,
+            output_png: args.output_png,
+            padding: args.padding.or(preset.padding).unwrap_or(DEFAULT_PADDING),
+            charset: args
+                .charset
+                .or_else(|| preset.charset.clone())
+                .unwrap_or_else(|| DEFAULT_CHARSET.to_string()),
+            charset_file: args.charset_file.or_else(|| preset.charset_file.clone()),
+            px: args.px.or(preset.px),
+            line_height: args
+                .line_height
+                .or(preset.line_height)
+                .unwrap_or(DEFAULT_LINE_HEIGHT),
+            max_atlas_size: args
+                .max_atlas_size
+                .or(preset.max_atlas_size)
+                .unwrap_or(DEFAULT_MAX_ATLAS_SIZE),
+            kerning_gap: args
+                .kerning_gap
+                .or(preset.kerning_gap)
+                .unwrap_or(DEFAULT_KERNING_GAP),
+            luau: args.luau.or_else(|| preset.luau.clone()),
+            dts: args.dts.or_else(|| preset.dts.clone()),
+            runtime_out: args.runtime_out.or_else(|| preset.runtime_out.clone()),
+            outline: args.outline.or(preset.outline).unwrap_or(0),
+            outline_png: args.outline_png.or_else(|| preset.outline_png.clone()),
+            no_antialias: args.no_antialias || preset.no_antialias.unwrap_or(false),
         }
     }
 }
@@ -113,7 +180,7 @@ struct PlacedGlyph {
     advance: f32,
 }
 
-fn run_impl(args: FontArgs) -> anyhow::Result<()> {
+fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
     let atlas_size = validate_atlas_size(args.max_atlas_size)?;
     if args.line_height == 0 {
         anyhow::bail!("--line-height must be > 0");
@@ -126,7 +193,7 @@ fn run_impl(args: FontArgs) -> anyhow::Result<()> {
         );
     }
 
-    let charset = load_charset(&args)?;
+    let charset = load_charset(args.charset_file.as_deref(), &args.charset)?;
     let charset_len = charset.chars().count();
     if charset_len == 0 {
         anyhow::bail!("charset must not be empty");
@@ -417,13 +484,13 @@ fn build_outline_layer(placed: &[PlacedGlyph], outline: u32) -> GlyphLayerMeta {
     }
 }
 
-fn load_charset(args: &FontArgs) -> anyhow::Result<String> {
-    if let Some(path) = &args.charset_file {
+fn load_charset(charset_file: Option<&Path>, charset: &str) -> anyhow::Result<String> {
+    if let Some(path) = charset_file {
         let s = fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("failed to read charset file {}: {e}", path.display()))?;
         return Ok(s);
     }
-    Ok(args.charset.clone())
+    Ok(charset.to_string())
 }
 
 fn layout_baseline_for(line_height: u32, padding: u32, px: f32) -> f32 {

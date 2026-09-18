@@ -1,11 +1,13 @@
-use crate::{asset::AssetRef, config};
+use crate::asset::AssetRef;
 use anyhow::bail;
 use relative_path::{RelativePath, RelativePathBuf};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 pub enum Node {
     Table(BTreeMap<String, Node>),
     String(String),
+    // Kept for the codegen unit tests: the pipeline only ever emits `String`.
+    #[allow(dead_code)]
     Content(String),
     #[allow(dead_code)]
     Number(u64),
@@ -18,75 +20,27 @@ pub enum Language {
 
 pub type NodeSource = BTreeMap<RelativePathBuf, AssetRef>;
 
-pub fn create_node(source: &NodeSource, config: &config::Codegen) -> Node {
+/// Build the asset tree from synced sources.
+///
+/// This is intentionally not configurable: Truffle always generates nested
+/// tables, keeps file extensions in keys, emits plain strings, and writes
+/// both Luau and TypeScript. It is the only shape the sync pipeline
+/// understands (Truffle re-reads the Luau output and keys metadata off the
+/// full `*.png` file names).
+pub fn create_node(source: &NodeSource) -> Node {
     let mut root = Node::Table(BTreeMap::new());
 
     for (path, value) in source {
-        let value = if config.content {
-            Node::Content(value.to_string())
-        } else {
-            Node::String(value.to_string())
-        };
-
-        match config.style {
-            config::CodegenStyle::Nested => {
-                let components = normalize_path_components(path, config.strip_extensions);
-                insert_nested(&mut root, &components, value);
-            }
-            config::CodegenStyle::Flat => {
-                let key = normalize_path_string(path, config.strip_extensions);
-                insert_flat(&mut root, &key, value);
-            }
-        }
+        let value = Node::String(value.to_string());
+        let components = normalize_path_components(path);
+        insert_nested(&mut root, &components, value);
     }
 
     root
 }
 
-fn normalize_path_components(path: &RelativePath, strip_extensions: bool) -> Vec<String> {
-    let mut components: Vec<String> = Vec::new();
-    let total_components = path.iter().count();
-
-    for (i, comp) in path.iter().enumerate() {
-        if i == total_components - 1 && strip_extensions {
-            let as_path = Path::new(comp);
-            if let Some(stem) = as_path.file_stem() {
-                components.push(stem.to_string_lossy().to_string());
-                continue;
-            }
-        }
-        components.push(comp.to_string());
-    }
-    components
-}
-
-fn normalize_path_string(path: &RelativePath, strip_extensions: bool) -> String {
-    if strip_extensions
-        && let (Some(file_name), Some(parent)) = (path.file_name(), path.parent())
-        && let Some(stem) = Path::new(file_name).file_stem()
-    {
-        let parent_str = parent.to_string();
-        return if parent_str.is_empty() || parent_str == "." {
-            stem.to_string_lossy().to_string()
-        } else {
-            format!("{}/{}", parent_str, stem.to_string_lossy())
-        };
-    }
-    path.to_string()
-}
-
-fn insert_flat(node: &mut Node, key: &str, value: Node) {
-    match node {
-        Node::Table(map) => {
-            map.insert(key.into(), value);
-        }
-        _ => {
-            *node = Node::Table(BTreeMap::new());
-            if let Node::Table(map) = node {
-                map.insert(key.into(), value);
-            }
-        }
-    }
+fn normalize_path_components(path: &RelativePath) -> Vec<String> {
+    path.iter().map(str::to_string).collect()
 }
 
 fn insert_nested(node: &mut Node, components: &[String], value: Node) {

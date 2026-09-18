@@ -18,7 +18,12 @@ struct PendingItem {
     inner_h: u32,
 }
 
-/// Pack variable-size rectangles into multiple square atlases using shelf packing.
+/// Pack variable-size rectangles into multiple square atlases using shelf
+/// packing.
+///
+/// Glyphs stay on shelf packing rather than the shared MaxRects packer: their
+/// sizes are near-uniform so shelf rows fill tightly, and it empirically packs
+/// a full charset into fewer pages than MaxRects for this shape of input.
 pub fn pack_glyphs(sizes: &[(u32, u32)], padding: u32, atlas_size: u32) -> Result<Vec<PackRect>> {
     if atlas_size == 0 {
         anyhow::bail!("atlas size must be > 0");

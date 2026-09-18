@@ -6,10 +6,10 @@ use crate::commands::image::HighlightArgs;
 use anyhow::Context;
 use asphalt::{
     cli::{SyncArgs as AsphaltSyncArgs, SyncTarget},
-    config::{Config as AsphaltConfig, Input as AsphaltInput},
+    config::Input as AsphaltInput,
     glob::Glob,
     lockfile::RawLockfile,
-    sync, sync_with_config,
+    sync_with_config,
 };
 use clap::Parser;
 use indicatif::MultiProgress;
@@ -23,6 +23,9 @@ const SCRATCH_ATLAS_PNG_DIR: &str = "atlases";
 const SCRATCH_SYNC_DIR: &str = "sync";
 const SCRATCH_UNATLASED_DIR: &str = "unatlased";
 const SCRATCH_SUBSET_DIR: &str = "subset";
+/// Packing state (tracked via gitignore exception) so atlases stay stable
+/// across machines and syncs.
+const ATLAS_STATE_FILE: &str = "truffle-atlases.toml";
 
 fn scratch_atlas_png_dir(scratch_dir: &Path) -> PathBuf {
     scratch_dir.join(SCRATCH_ATLAS_PNG_DIR)
@@ -67,35 +70,35 @@ fn remove_scratch_subset(scratch_dir: &Path) -> anyhow::Result<()> {
 #[derive(Parser)]
 #[command(about = "Sync assets and augment metadata with image dimensions")]
 pub struct SyncArgs {
-    /// Path to the Luau assets module file
-    #[arg(long, default_value = "src/shared/data/assets/assets.luau")]
-    pub assets_input: PathBuf,
+    /// Path to the Luau assets module file (defaults to truffle.toml `assets_input`)
+    #[arg(long)]
+    pub assets_input: Option<PathBuf>,
 
-    /// Path to write the augmented Luau assets module
-    #[arg(long, default_value = "src/shared/data/assets/assets.luau")]
-    pub assets_output: PathBuf,
+    /// Path to write the augmented Luau assets module (defaults to truffle.toml `assets_output`)
+    #[arg(long)]
+    pub assets_output: Option<PathBuf>,
 
-    /// Path to write the TypeScript declaration file
-    #[arg(long, default_value = "src/shared/data/assets/assets.d.ts")]
-    pub dts_output: PathBuf,
+    /// Path to write the TypeScript declaration file (defaults to truffle.toml `dts_output`)
+    #[arg(long)]
+    pub dts_output: Option<PathBuf>,
 
-    /// Path to the raw assets images folder
-    #[arg(long, default_value = "assets/images")]
-    pub images_folder: PathBuf,
+    /// Path to the raw assets images folder (defaults to truffle.toml `images_folder`)
+    #[arg(long)]
+    pub images_folder: Option<PathBuf>,
 
-    /// Pack images into atlas textures before syncing
+    /// Pack images into atlas textures before syncing (overrides truffle.toml `atlas`)
     #[arg(long)]
     pub atlas: bool,
 
-    /// Atlas texture size (power-of-two square)
+    /// Atlas texture size, power-of-two square (overrides truffle.toml `atlas_size`)
     #[arg(long)]
     pub atlas_size: Option<u32>,
 
-    /// Padding (in pixels) around each sprite in the atlas
+    /// Padding in pixels around each sprite in the atlas (overrides truffle.toml `atlas_padding`)
     #[arg(long)]
     pub atlas_padding: Option<u32>,
 
-    /// Image keys to exclude from atlas packing (repeatable)
+    /// Image keys to exclude from atlas packing, repeatable (overrides truffle.toml `atlas_exclude`)
     #[arg(long)]
     pub atlas_exclude: Vec<String>,
 
@@ -103,12 +106,12 @@ pub struct SyncArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Scratch directory for intermediate/generated files
+    /// Scratch directory for intermediate/generated files (overrides truffle.toml `scratch_dir`)
     #[arg(long)]
     pub scratch_dir: Option<PathBuf>,
 
-    /// TRUFFLE_API_KEY environment variable (or read from .env file)
-    #[arg(long)]
+    /// Roblox Open Cloud API key (overrides `TRUFFLE_API_KEY` env and truffle.toml `api_key`)
+    #[arg(long, env = "TRUFFLE_API_KEY")]
     pub api_key: Option<String>,
 
     /// Skip atlas packing and sync source images directly
@@ -135,9 +138,16 @@ pub fn run(args: SyncArgs) -> bool {
 }
 
 async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
-    let backup = backup_asset_modules(&args)?;
+    // Single config parse: CLI flags override truffle.toml, which already
+    // carries built-in defaults for everything it does not set.
+    let config = TruffleConfig::read()
+        .await
+        .context("Failed to read truffle.toml. Make sure it exists in the current directory.")?;
+    let args = EffectiveSync::resolve(args, &config);
 
-    let result = run_async_inner(args).await;
+    let backup = backup_asset_modules(&args.assets_output, &args.dts_output)?;
+
+    let result = run_async_inner(args, config).await;
 
     if result.is_err() {
         if let Some(backup) = backup {
@@ -149,26 +159,67 @@ async fn run_async(args: SyncArgs) -> anyhow::Result<()> {
     result
 }
 
-async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
-    // Load truffle.toml config
-    let config = TruffleConfig::read()
-        .await
-        .context("Failed to read truffle.toml. Make sure it exists in the current directory.")?;
+/// `SyncArgs` with every `truffle.toml`-backed option resolved.
+///
+/// Resolution order per option: CLI flag, then `truffle.toml`, then the
+/// built-in default (which `truffle.toml` itself already applies, so this
+/// mostly fills in CLI `None`s from config).
+struct EffectiveSync {
+    assets_input: PathBuf,
+    assets_output: PathBuf,
+    dts_output: PathBuf,
+    images_folder: PathBuf,
+    scratch_dir: PathBuf,
+    api_key: Option<String>,
+    atlas: bool,
+    atlas_size: u32,
+    atlas_padding: u32,
+    atlas_exclude: Vec<String>,
+    dry_run: bool,
+    skip_atlas: bool,
+    sync_only: Option<String>,
+}
 
-    let scratch_dir = match args.scratch_dir.clone() {
-        Some(dir) => dir,
-        None => config.truffle.scratch_dir.clone(),
-    };
+impl EffectiveSync {
+    fn resolve(args: SyncArgs, config: &TruffleConfig) -> Self {
+        Self {
+            assets_input: args
+                .assets_input
+                .unwrap_or_else(|| config.assets_input.clone()),
+            assets_output: args
+                .assets_output
+                .unwrap_or_else(|| config.assets_output.clone()),
+            dts_output: args.dts_output.unwrap_or_else(|| config.dts_output.clone()),
+            images_folder: args
+                .images_folder
+                .unwrap_or_else(|| config.images_folder.clone()),
+            scratch_dir: args
+                .scratch_dir
+                .unwrap_or_else(|| config.scratch_dir.clone()),
+            api_key: args.api_key,
+            atlas: args.atlas,
+            atlas_size: args.atlas_size.unwrap_or(config.atlas_size),
+            atlas_padding: args.atlas_padding.unwrap_or(config.atlas_padding),
+            atlas_exclude: args.atlas_exclude,
+            dry_run: args.dry_run,
+            skip_atlas: args.skip_atlas,
+            sync_only: args.sync_only,
+        }
+    }
+}
+
+async fn run_async_inner(args: EffectiveSync, config: TruffleConfig) -> anyhow::Result<()> {
+    let scratch_dir: PathBuf = args.scratch_dir.clone();
     prepare_scratch_dir(&scratch_dir)?;
 
     // Auto-generate highlights if configured (before sync so they get synced too)
-    if config.truffle.auto_highlight {
+    if config.auto_highlight {
         println!("[sync] Generating highlight variants …");
         let highlight_args = HighlightArgs {
             input_path: args.images_folder.clone(),
             dry_run: false,
-            force: config.truffle.highlight_force,
-            thickness: config.truffle.highlight_thickness,
+            force: config.highlight_force,
+            thickness: config.highlight_thickness,
             recursive: true,
         };
         crate::commands::image::run(crate::commands::image::ImageCommands::Highlight(
@@ -176,25 +227,27 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         ));
     }
 
-    let atlas_enabled = !args.skip_atlas && (args.atlas || config.truffle.atlas);
+    let atlas_enabled = !args.skip_atlas && (args.atlas || config.atlas);
     if atlas_enabled {
         println!("[sync] Building image atlases …");
         let atlas_dir = scratch_atlas_png_dir(&scratch_dir);
         let sync_codegen_dir = scratch_sync_dir(&scratch_dir);
         // Asphalt codegen writes `{input_name}.luau`. Our atlas input is named `atlases`.
         let atlas_assets_output = sync_codegen_dir.join("atlases.luau");
-        let atlas_padding = args.atlas_padding.unwrap_or(config.truffle.atlas_padding);
-        let atlas_size = args.atlas_size.unwrap_or(config.truffle.atlas_size);
+        let atlas_padding = args.atlas_padding;
+        let atlas_size = args.atlas_size;
         let atlas_exclude = resolve_atlas_exclude(
             &args.atlas_exclude,
-            &config.truffle.atlas_exclude,
+            &config.atlas_exclude,
             &args.images_folder,
         );
         let atlas_exclude_matcher = build_atlas_exclude(&atlas_exclude)?;
+        let atlas_state_path = scratch_dir.join(ATLAS_STATE_FILE);
 
         let placements = build_atlases(
             &args.images_folder,
             &atlas_dir,
+            &atlas_state_path,
             AtlasOptions {
                 padding: atlas_padding,
                 size: atlas_size,
@@ -212,15 +265,11 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         let unatlased_codegen_dir = scratch_unatlased_dir(&scratch_dir);
 
         if !args.dry_run {
-            // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
-            let api_key = resolve_api_key(args.api_key.clone())?;
+            // Resolve API key: --api-key flag, TRUFFLE_API_KEY env (.env included), truffle.toml.
+            let api_key = resolve_api_key(args.api_key.clone(), config.api_key.clone())?;
 
-            let mut asphalt_config = AsphaltConfig::read_from(PathBuf::from("."))
-                .await
-                .context("Failed to read Asphalt config from truffle.toml")?;
-
-            // Ensure atlas file names are preserved as keys.
-            asphalt_config.codegen.strip_extensions = false;
+            // Reuse the already-parsed config instead of re-reading truffle.toml.
+            let mut asphalt_config = config.asphalt.clone();
             asphalt_config.inputs = {
                 let mut inputs = HashMap::new();
 
@@ -356,8 +405,8 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
     }
 
     // Run Asphalt sync
-    // Resolve API key (TRUFFLE_API_KEY instead of ASPHALT_API_KEY)
-    let api_key = resolve_api_key(args.api_key)?;
+    // Resolve API key: --api-key flag, TRUFFLE_API_KEY env (.env included), truffle.toml.
+    let api_key = resolve_api_key(args.api_key.clone(), config.api_key.clone())?;
     println!("[sync] Running backend sync …");
     let multi_progress = MultiProgress::new();
     let sync_args = AsphaltSyncArgs {
@@ -368,9 +417,8 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
     };
 
     if let Some(sync_only) = &args.sync_only {
-        let mut asphalt_config = AsphaltConfig::read_from(PathBuf::from("."))
-            .await
-            .context("Failed to read Asphalt config from truffle.toml")?;
+        // Reuse the already-parsed config instead of re-reading truffle.toml.
+        let mut asphalt_config = config.asphalt.clone();
         remove_scratch_subset(&scratch_dir)?;
         let subset_output = scratch_subset_dir(&scratch_dir);
         asphalt_config.inputs = HashMap::from([(
@@ -435,7 +483,7 @@ async fn run_async_inner(args: SyncArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    sync(sync_args, multi_progress)
+    sync_with_config(config.asphalt.clone(), sync_args, multi_progress)
         .await
         .context("Failed to sync assets with Asphalt")?;
 
@@ -465,33 +513,31 @@ struct AssetModuleBackup {
     dts_bytes: Vec<u8>,
 }
 
-fn backup_asset_modules(args: &SyncArgs) -> anyhow::Result<Option<AssetModuleBackup>> {
-    if !args.assets_output.exists() && !args.dts_output.exists() {
+fn backup_asset_modules(
+    assets_output: &Path,
+    dts_output: &Path,
+) -> anyhow::Result<Option<AssetModuleBackup>> {
+    if !assets_output.exists() && !dts_output.exists() {
         return Ok(None);
     }
 
-    let luau_bytes = if args.assets_output.exists() {
-        fs::read(&args.assets_output).with_context(|| {
-            format!(
-                "Failed to read backup source {}",
-                args.assets_output.display()
-            )
-        })?
+    let luau_bytes = if assets_output.exists() {
+        fs::read(assets_output)
+            .with_context(|| format!("Failed to read backup source {}", assets_output.display()))?
     } else {
         Vec::new()
     };
 
-    let dts_bytes = if args.dts_output.exists() {
-        fs::read(&args.dts_output).with_context(|| {
-            format!("Failed to read backup source {}", args.dts_output.display())
-        })?
+    let dts_bytes = if dts_output.exists() {
+        fs::read(dts_output)
+            .with_context(|| format!("Failed to read backup source {}", dts_output.display()))?
     } else {
         Vec::new()
     };
 
     Ok(Some(AssetModuleBackup {
-        luau: args.assets_output.clone(),
-        dts: args.dts_output.clone(),
+        luau: assets_output.to_path_buf(),
+        dts: dts_output.to_path_buf(),
         luau_bytes,
         dts_bytes,
     }))
@@ -560,24 +606,20 @@ fn atlas_file_ids_from_assets(
     out
 }
 
-fn resolve_api_key(provided: Option<String>) -> anyhow::Result<String> {
-    if let Some(key) = provided {
+/// Resolve the API key: `--api-key` flag (which also reads `TRUFFLE_API_KEY`
+/// from the environment, with `.env` loaded at startup), then truffle.toml.
+fn resolve_api_key(flag: Option<String>, config_key: Option<String>) -> anyhow::Result<String> {
+    if let Some(key) = flag {
         return Ok(key);
     }
 
-    if let Some(key) = crate::config::ApiKey::from_env() {
-        return Ok(key.into_inner());
+    if let Some(key) = config_key {
+        return Ok(key);
     }
 
-    if let Ok(env_content) = fs::read_to_string(".env") {
-        for line in env_content.lines() {
-            if let Some(key) = line.strip_prefix("TRUFFLE_API_KEY=") {
-                return Ok(key.trim().to_string());
-            }
-        }
-    }
-
-    anyhow::bail!("TRUFFLE_API_KEY environment variable is not set. Not syncing assets.")
+    anyhow::bail!(
+        "No API key found. Pass --api-key, set TRUFFLE_API_KEY (e.g. via .env), or set `api_key` in truffle.toml."
+    )
 }
 
 fn resolve_atlas_exclude(cli: &[String], config: &[String], images_folder: &Path) -> Vec<String> {
@@ -801,11 +843,8 @@ fn merge_asset_values(
 fn sync_subset_nested_prefix(sync_only: &str, images_folder: &Path) -> Option<Vec<String>> {
     let images = normalize_path_for_compare(images_folder);
     let mut pattern = sync_only.replace('\\', "/");
-    if let Some(rest) = pattern.strip_prefix(&format!("{images}/")) {
-        pattern = rest.to_string();
-    } else {
-        return None;
-    }
+    let rest = pattern.strip_prefix(&format!("{images}/"))?;
+    pattern = rest.to_string();
 
     let dir = pattern.split("/**").next()?.trim_end_matches('/');
     if dir.is_empty() {

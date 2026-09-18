@@ -154,14 +154,11 @@ pub async fn sync_with_config(
             .get(&input_name)
             .context("Failed to find input for codegen input")?;
 
-        let mut langs_to_generate = vec![codegen::Language::Luau];
-
-        if config.codegen.typescript {
-            langs_to_generate.push(codegen::Language::TypeScript);
-        }
+        // Truffle always emits both languages; see `codegen::create_node`.
+        let langs_to_generate = [codegen::Language::Luau, codegen::Language::TypeScript];
 
         for lang in langs_to_generate {
-            let node = codegen::create_node(&source, &config.codegen);
+            let node = codegen::create_node(&source);
             let ext = match lang {
                 codegen::Language::Luau => "luau",
                 codegen::Language::TypeScript => "d.ts",

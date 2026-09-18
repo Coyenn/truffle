@@ -55,48 +55,89 @@ truffle image terrain assets/images/house.png
 
 ## Configuration
 
-Truffle uses a `truffle.toml` configuration file that extends Asphalt's configuration. This file should be placed in your project root.
+Truffle uses a single `truffle.toml` configuration file in your project root.
+There is no `[codegen]` section: Truffle always generates nested tables with
+extensions kept plus TypeScript declarations, the only shape the sync pipeline
+understands. There is no `[truffle]` section either: those options live at the
+top level next to `creator` and `inputs`.
 
 ### Example `truffle.toml`
 
 ```toml
-# All Asphalt configuration options are supported
+# Top-level keys first: anything after a [table] header belongs to that
+# table, so keep these above [creator]/[inputs]/[font].
+
+# Everything below is optional. Shown with defaults.
+# Prefer TRUFFLE_API_KEY (.env included) over committing `api_key`.
+# api_key = "your-open-cloud-key"
+assets_input = "src/shared/data/assets/assets.luau"
+assets_output = "src/shared/data/assets/assets.luau"
+dts_output = "src/shared/data/assets/assets.d.ts"
+images_folder = "assets/images"
+
+auto_highlight = false
+highlight_thickness = 1
+highlight_force = false
+
+atlas = false
+atlas_size = 1024
+atlas_padding = 4
+atlas_exclude = []
+scratch_dir = ".truffle"
+
 [creator]
 type = "user"
 id = 9670971
 
-[codegen]
-typescript = true
-style = "flat"
-
 [inputs.assets]
-path = "assets/**/*"
-output_path = "src/shared"
+path = "assets/images/**/*"
+output_path = "src/shared/data/assets"
 
-# Truffle-specific options
-[truffle]
-# Automatically generate highlight variants
-auto_highlight = true
-# Default highlight thickness (used when auto_highlight is true)
-highlight_thickness = 2
-# Force regenerate highlights even if they exist
-highlight_force = false
+# Optional shared defaults for `truffle font`. CLI flags win over these.
+[font]
+padding = 5
+px = 121
+line_height = 95
 ```
 
 ### Configuration Options
 
-#### Asphalt Options
-
-All options from [Asphalt's configuration](https://github.com/jackTabsCode/asphalt?tab=readme-ov-file#configuration) are supported:
 - `creator`: Roblox creator (user or group) to upload assets under
-- `codegen`: Code generation options (TypeScript, style, etc.)
 - `inputs`: Asset input configurations (paths, output directories, etc.)
-
-#### Truffle Options
-
+- `api_key` (default: unset): Open Cloud API key fallback. Precedence is
+  `--api-key` flag, then `TRUFFLE_API_KEY` (`.env` is loaded automatically),
+  then this field.
+- `assets_input` / `assets_output` / `dts_output` / `images_folder`: sync
+  input/output paths (defaults shown above). Each has a matching CLI flag
+  that overrides it for one invocation.
 - `auto_highlight` (default: `false`): Automatically generate highlight variants after syncing assets
 - `highlight_thickness` (default: `1`): Outline thickness in pixels for auto-generated highlights
 - `highlight_force` (default: `false`): Force regenerate highlights even if they already exist
+- `atlas` (default: `false`): Pack sprites into atlas textures before upload
+- `atlas_size` (default: `1024`): Square atlas texture size (power of two)
+- `atlas_padding` (default: `4`): Padding in pixels around each sprite in the atlas
+- `atlas_exclude` (default: `[]`): Image keys excluded from atlas packing (synced individually)
+- `scratch_dir` (default: `.truffle`): Scratch directory for intermediate files
+- `[font]`: Optional `truffle font` preset (`padding`, `charset`,
+  `charset_file`, `px`, `line_height`, `max_atlas_size`, `kerning_gap`,
+  `luau`, `dts`, `runtime_out`, `outline`, `outline_png`, `no_antialias`).
+  Every field is optional; CLI flags override the preset, which overrides
+  the built-in defaults. Input/output paths stay per-invocation arguments.
+
+### Atlas packing
+
+When `atlas = true`, sprites are packed with a **MaxRects** layout (Best
+Short-Side Fit) for high density. Packing is also **incremental**: previously
+placed sprites keep their page and rect, and only new/changed sprites are
+packed into leftover free space or fresh pages. Because Roblox uploads are
+content-addressed, this means adding one sprite only reuploads the atlas page
+it actually lands on instead of regenerating every atlas.
+
+Packing state is persisted to `.truffle/truffle-atlases.toml` (inside the
+scratch directory). It is intended to be tracked in version control — add a
+`.truffle/*` + `!.truffle/truffle-atlases.toml` gitignore exception — so
+results are stable across machines and CI. Delete it to force a fresh full
+repack.
 
 ## Commands
 
@@ -106,16 +147,17 @@ Syncs assets to Roblox using the bundled Asphalt, then augments the Luau asset m
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `--assets-input <PATH>` | Existing Luau asset registry to read | `src/shared/data/assets/assets.luau` |
-| `--assets-output <PATH>` | Location to write the augmented module | `src/shared/data/assets/assets.luau` |
-| `--dts-output <PATH>` | Path for generated TypeScript definitions | `src/shared/data/assets/assets.d.ts` |
-| `--images-folder <PATH>` | Root folder that contains PNG sources | `assets/images` |
-| `--api-key <KEY>` | API key override (otherwise `.env`/env var) | `TRUFFLE_API_KEY` |
+| `--assets-input <PATH>` | Existing Luau asset registry to read | truffle.toml `assets_input` |
+| `--assets-output <PATH>` | Location to write the augmented module | truffle.toml `assets_output` |
+| `--dts-output <PATH>` | Path for generated TypeScript definitions | truffle.toml `dts_output` |
+| `--images-folder <PATH>` | Root folder that contains PNG sources | truffle.toml `images_folder` |
+| `--api-key <KEY>` | API key override (otherwise `TRUFFLE_API_KEY` / truffle.toml `api_key`) | `TRUFFLE_API_KEY` env |
 
 Requirements:
 
 - `truffle.toml` configuration file in the project root
-- `TRUFFLE_API_KEY` environment variable set (or provided via `--api-key`)
+- An API key from `--api-key`, `TRUFFLE_API_KEY` (`.env` is loaded
+  automatically), or truffle.toml `api_key`
 
 ### `truffle image highlight`
 
@@ -237,7 +279,7 @@ CI runs fmt, clippy, and tests on every push or pull request. Tagged releases ad
 
 ## Authentication
 
-Set the `TRUFFLE_API_KEY` environment variable with your Roblox Open Cloud API key. You can get one from the [Creator Dashboard](https://create.roblox.com/credentials).
+Set the `TRUFFLE_API_KEY` environment variable with your Roblox Open Cloud API key (`.env` files are loaded automatically), pass `--api-key`, or set `api_key` in `truffle.toml`. You can get a key from the [Creator Dashboard](https://create.roblox.com/credentials).
 
 The following permissions are required:
 - `asset:read`

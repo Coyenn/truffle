@@ -1,6 +1,5 @@
 mod assets;
 mod commands;
-mod config;
 mod image;
 
 use clap::{builder::styling, Parser, Subcommand};
@@ -33,21 +32,18 @@ enum Commands {
         #[command(subcommand)]
         command: commands::image::ImageCommands,
     },
-    /// Push Lexi lexicons to Roblox cloud localization
-    Translations {
-        #[command(subcommand)]
-        command: commands::translations::TranslationsCommands,
-    },
 }
 
 fn main() {
+    // Load .env so TRUFFLE_API_KEY (and friends) resolve without a wrapper.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
 
     let result = match cli.command {
         Commands::Sync(args) => commands::sync::run(args),
         Commands::Font(args) => commands::font::run(args),
         Commands::Image { command } => commands::image::run(command),
-        Commands::Translations { command } => commands::translations::run(command),
     };
 
     std::process::exit(if result { 0 } else { 1 });

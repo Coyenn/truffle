@@ -6,4 +6,3 @@ pub mod project;
 pub mod snap;
 pub mod sync;
 pub mod terrain;
-pub mod translations;

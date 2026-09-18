@@ -101,10 +101,6 @@ Asphalt is configured with a project file called `asphalt.toml`. It is required 
 type = "user"
 id = 9670971
 
-[codegen]
-typescript = true
-style = "flat"
-
 [inputs.assets]
 path = "assets/**/*"
 output_path = "src/shared"
@@ -114,14 +110,15 @@ output_path = "src/shared"
 "some_image_on_roblox.png" = { id = 987654321 }
 ```
 
+Code generation is fixed: nested tables with extensions kept, plus a
+TypeScript definition file. There are no codegen options to set.
+
 </details>
 
 ### Format
 
 -   `creator`: [Creator](#creator)
 	-   The Roblox creator to upload the assets under.
--   `codegen`: [Codegen](#codegen) (optional)
-	-   Code generation options.
 -	`inputs`: map<string, [Input](#input)>
 	-   A map of input names to input configurations.
 
@@ -129,17 +126,6 @@ output_path = "src/shared"
 
 -	`type`: "user" or "group"
 -	`id`: number
-
-#### Codegen
-
--   `typescript`: boolean (optional)
-    -   Generate a TypeScript definition file.
--   `style`: "flat" | "nested" (optional)
-    -   The code generation style to use. Defaults to `flat`, which lets you index assets as if they were paths. You may consider using `nested` if you are not a TypeScript user as Luau does not support template literal types.
--   `strip_extensions`: boolean (optional)
-    -   Whether to strip the file extension. Defaults to `false` for the same reason described above.
--   `content`: boolean (optional)
-    -   Whether to output `Content` instead of `string`s. Defaults to `false`.
 
 #### Input
 -	`path`: glob

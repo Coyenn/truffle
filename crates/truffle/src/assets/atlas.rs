@@ -1,7 +1,9 @@
 use super::model::{AssetMeta, AssetValue};
+use super::pack::{self, Rect as PackRect, SeedRect};
 use anyhow::{Context, Result};
 use asphalt::glob::Glob;
 use image::{GenericImageView, ImageBuffer, Rgba};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -42,7 +44,7 @@ impl AtlasExclude {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasRect {
     pub x: u32,
     pub y: u32,
@@ -72,12 +74,41 @@ struct PlacedSprite {
     rect: AtlasRect,
 }
 
+/// Persisted packing state used to keep atlases stable across syncs.
+///
+/// A sprite that kept its size and page is pinned to its previous rect, so an
+/// added/removed sprite only disturbs the free space it actually touches.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AtlasState {
+    atlas_size: u32,
+    padding: u32,
+    placements: BTreeMap<String, StoredPlacement>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredPlacement {
+    page: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
 pub fn build_atlases(
     images_folder: &Path,
     output_dir: &Path,
+    state_path: &Path,
     options: AtlasOptions,
 ) -> Result<BTreeMap<String, SpritePlacement>> {
     let atlas_size = validate_atlas_size(options.size)?;
+
+    let previous = match load_state(state_path) {
+        Ok(state) if state.atlas_size == atlas_size && state.padding == options.padding => {
+            state.placements
+        }
+        _ => BTreeMap::new(),
+    };
+
     if output_dir.exists() {
         std::fs::remove_dir_all(output_dir).with_context(|| {
             format!("failed to clean atlas output dir: {}", output_dir.display())
@@ -91,20 +122,41 @@ pub fn build_atlases(
     })?;
 
     let sprites = scan_pngs(images_folder, &options.exclude)?;
-    let placed = pack_sprites(&sprites, options.padding, atlas_size)?;
+    let placed = plan_atlas(&sprites, &previous, options.padding, atlas_size)?;
 
     write_atlas_images(&placed, output_dir, options.padding, atlas_size)?;
 
     let mut placements = BTreeMap::new();
+    let mut state = BTreeMap::new();
     for sprite in placed {
         placements.insert(
-            sprite.key,
+            sprite.key.clone(),
             SpritePlacement {
                 atlas_file_name: atlas_file_name(sprite.atlas_index),
                 rect: sprite.rect,
             },
         );
+        state.insert(
+            sprite.key,
+            StoredPlacement {
+                page: sprite.atlas_index as u32,
+                x: sprite.rect.x,
+                y: sprite.rect.y,
+                w: sprite.rect.w,
+                h: sprite.rect.h,
+            },
+        );
     }
+
+    save_state(
+        state_path,
+        AtlasState {
+            atlas_size,
+            padding: options.padding,
+            placements: state,
+        },
+    )?;
+
     Ok(placements)
 }
 
@@ -194,74 +246,103 @@ fn scan_pngs(images_folder: &Path, exclude: &AtlasExclude) -> Result<Vec<Pending
         });
     }
 
-    sprites.sort_by(|a, b| {
-        b.h.cmp(&a.h)
-            .then_with(|| b.w.cmp(&a.w))
-            .then_with(|| a.key.cmp(&b.key))
-    });
+    sprites.sort_by(|a, b| a.key.cmp(&b.key));
 
     Ok(sprites)
 }
 
-fn pack_sprites(
+/// Pin previously placed sprites and pack only new/changed ones into leftover
+/// free space, so an added sprite does not disturb existing atlases.
+fn plan_atlas(
     sprites: &[PendingSprite],
+    previous: &BTreeMap<String, StoredPlacement>,
     padding: u32,
     atlas_size: u32,
 ) -> Result<Vec<PlacedSprite>> {
-    let mut atlas_index: usize = 0;
-    let mut cursor_x: u32 = 0;
-    let mut cursor_y: u32 = 0;
-    let mut row_h: u32 = 0;
+    let gutter = padding.saturating_mul(2);
 
-    let mut placed = Vec::with_capacity(sprites.len());
+    // Fixed sprites keep their page + rect; everything else is repacked.
+    let mut fixed_by_page: BTreeMap<u32, Vec<PackRect>> = BTreeMap::new();
+    let mut fixed_placed: Vec<PlacedSprite> = Vec::new();
+    let mut to_pack: Vec<&PendingSprite> = Vec::new();
 
-    for s in sprites {
-        let alloc_w = s.w + padding.saturating_mul(2);
-        let alloc_h = s.h + padding.saturating_mul(2);
-
-        if alloc_w > atlas_size || alloc_h > atlas_size {
-            anyhow::bail!(
-                "{} is too large to pack into a {}x{} atlas ({}x{})",
-                s.key,
-                atlas_size,
-                atlas_size,
-                s.w,
-                s.h
-            );
+    for sprite in sprites {
+        match previous.get(&sprite.key) {
+            Some(prev) if prev.w == sprite.w && prev.h == sprite.h => {
+                let alloc = PackRect {
+                    x: prev.x.saturating_sub(padding),
+                    y: prev.y.saturating_sub(padding),
+                    w: sprite.w.saturating_add(gutter),
+                    h: sprite.h.saturating_add(gutter),
+                };
+                fixed_by_page.entry(prev.page).or_default().push(alloc);
+                fixed_placed.push(PlacedSprite {
+                    key: sprite.key.clone(),
+                    src_path: sprite.src_path.clone(),
+                    atlas_index: prev.page as usize,
+                    rect: AtlasRect {
+                        x: prev.x,
+                        y: prev.y,
+                        w: prev.w,
+                        h: prev.h,
+                    },
+                });
+            }
+            _ => to_pack.push(sprite),
         }
+    }
 
-        if cursor_x.saturating_add(alloc_w) > atlas_size {
-            cursor_x = 0;
-            cursor_y = cursor_y.saturating_add(row_h);
-            row_h = 0;
-        }
+    // Reconstruct free space on each page that has fixed sprites.
+    let mut seed: Vec<SeedRect> = Vec::new();
+    for (page, allocs) in &fixed_by_page {
+        seed.extend(
+            pack::free_space(atlas_size, allocs)
+                .into_iter()
+                .map(|rect| SeedRect { page: *page, rect }),
+        );
+    }
 
-        if cursor_y.saturating_add(alloc_h) > atlas_size {
-            atlas_index += 1;
-            cursor_x = 0;
-            cursor_y = 0;
-            row_h = 0;
-        }
+    let sizes: Vec<(u32, u32)> = to_pack.iter().map(|s| (s.w, s.h)).collect();
+    let packed = pack::pack(&sizes, padding, atlas_size, &seed)?;
 
-        let rect = AtlasRect {
-            x: cursor_x + padding,
-            y: cursor_y + padding,
-            w: s.w,
-            h: s.h,
-        };
-
+    let mut placed = fixed_placed;
+    for (i, sprite) in to_pack.into_iter().enumerate() {
+        let p = packed[i];
         placed.push(PlacedSprite {
-            key: s.key.clone(),
-            src_path: s.src_path.clone(),
-            atlas_index,
-            rect,
+            key: sprite.key.clone(),
+            src_path: sprite.src_path.clone(),
+            atlas_index: p.page as usize,
+            rect: AtlasRect {
+                x: p.rect.x,
+                y: p.rect.y,
+                w: p.rect.w,
+                h: p.rect.h,
+            },
         });
-
-        cursor_x = cursor_x.saturating_add(alloc_w);
-        row_h = row_h.max(alloc_h);
     }
 
     Ok(placed)
+}
+
+fn load_state(path: &Path) -> Result<AtlasState> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Ok(AtlasState::default()),
+    };
+    match toml::from_str(&content) {
+        Ok(state) => Ok(state),
+        Err(_) => Ok(AtlasState::default()),
+    }
+}
+
+fn save_state(path: &Path, state: AtlasState) -> Result<()> {
+    let mut content = toml::to_string(&state).context("failed to serialize atlas state")?;
+    content.insert_str(
+        0,
+        "# This file is automatically @generated by Truffle.\n# It is not intended for manual editing.\n",
+    );
+    std::fs::write(path, content)
+        .with_context(|| format!("failed to write atlas state to {}", path.display()))
 }
 
 fn write_atlas_images(
@@ -372,4 +453,200 @@ fn insert_meta(root: &mut BTreeMap<String, AssetValue>, path: &[String], meta: A
     };
 
     insert_meta(map, &path[1..], meta);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(key: &str, w: u32, h: u32) -> PendingSprite {
+        PendingSprite {
+            key: key.to_string(),
+            src_path: PathBuf::from(key),
+            w,
+            h,
+        }
+    }
+
+    fn overlaps(a: &AtlasRect, b: &AtlasRect) -> bool {
+        let a_r = a.x + a.w;
+        let a_b = a.y + a.h;
+        let b_r = b.x + b.w;
+        let b_b = b.y + b.h;
+        a.x < b_r && b.x < a_r && a.y < b_b && b.y < a_b
+    }
+
+    #[test]
+    fn added_sprite_does_not_move_existing_sprites() {
+        let padding = 4u32;
+        let size = 1024u32;
+
+        let mut previous = BTreeMap::new();
+        previous.insert(
+            "a.png".to_string(),
+            StoredPlacement {
+                page: 0,
+                x: 4,
+                y: 4,
+                w: 64,
+                h: 64,
+            },
+        );
+        previous.insert(
+            "b.png".to_string(),
+            StoredPlacement {
+                page: 0,
+                x: 76,
+                y: 4,
+                w: 64,
+                h: 64,
+            },
+        );
+
+        let sprites = vec![
+            pending("a.png", 64, 64),
+            pending("b.png", 64, 64),
+            pending("c.png", 64, 64),
+        ];
+
+        let placed = plan_atlas(&sprites, &previous, padding, size).unwrap();
+        let by_key: BTreeMap<_, _> = placed.iter().map(|p| (p.key.as_str(), p)).collect();
+
+        let a = by_key["a.png"];
+        let b = by_key["b.png"];
+        assert_eq!(
+            a.rect,
+            AtlasRect {
+                x: 4,
+                y: 4,
+                w: 64,
+                h: 64
+            }
+        );
+        assert_eq!(
+            b.rect,
+            AtlasRect {
+                x: 76,
+                y: 4,
+                w: 64,
+                h: 64
+            }
+        );
+
+        // The new sprite landed on the same page without disturbing a or b.
+        let c = by_key["c.png"];
+        assert_eq!(c.atlas_index, 0);
+        assert!(!overlaps(&c.rect, &a.rect));
+        assert!(!overlaps(&c.rect, &b.rect));
+    }
+
+    #[test]
+    fn removed_sprite_frees_space_and_keeps_others() {
+        let padding = 4u32;
+        let size = 1024u32;
+
+        let mut previous = BTreeMap::new();
+        previous.insert(
+            "a.png".to_string(),
+            StoredPlacement {
+                page: 0,
+                x: 4,
+                y: 4,
+                w: 64,
+                h: 64,
+            },
+        );
+        previous.insert(
+            "gone.png".to_string(),
+            StoredPlacement {
+                page: 0,
+                x: 76,
+                y: 4,
+                w: 64,
+                h: 64,
+            },
+        );
+
+        let sprites = vec![pending("a.png", 64, 64), pending("c.png", 64, 64)];
+        let placed = plan_atlas(&sprites, &previous, padding, size).unwrap();
+        let by_key: BTreeMap<_, _> = placed.iter().map(|p| (p.key.as_str(), p)).collect();
+
+        assert_eq!(
+            by_key["a.png"].rect,
+            AtlasRect {
+                x: 4,
+                y: 4,
+                w: 64,
+                h: 64
+            }
+        );
+        assert_eq!(by_key["a.png"].atlas_index, 0);
+        // c may reuse the freed slot, but must not overlap a.
+        assert!(!overlaps(&by_key["c.png"].rect, &by_key["a.png"].rect));
+    }
+
+    #[test]
+    fn resized_sprite_is_repacked_not_pinned() {
+        let padding = 4u32;
+        let size = 1024u32;
+
+        let mut previous = BTreeMap::new();
+        previous.insert(
+            "a.png".to_string(),
+            StoredPlacement {
+                page: 0,
+                x: 4,
+                y: 4,
+                w: 64,
+                h: 64,
+            },
+        );
+
+        // a.png grew, so its old placement is stale.
+        let sprites = vec![pending("a.png", 128, 128)];
+        let placed = plan_atlas(&sprites, &previous, padding, size).unwrap();
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].rect.w, 128);
+        assert_eq!(placed[0].rect.h, 128);
+    }
+
+    #[test]
+    fn state_roundtrips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atlas-state.toml");
+
+        let mut placements = BTreeMap::new();
+        placements.insert(
+            "a.png".to_string(),
+            StoredPlacement {
+                page: 2,
+                x: 10,
+                y: 20,
+                w: 30,
+                h: 40,
+            },
+        );
+        save_state(
+            &path,
+            AtlasState {
+                atlas_size: 1024,
+                padding: 4,
+                placements,
+            },
+        )
+        .unwrap();
+
+        let loaded = load_state(&path).unwrap();
+        assert_eq!(loaded.atlas_size, 1024);
+        assert_eq!(loaded.padding, 4);
+        assert_eq!(loaded.placements["a.png"].page, 2);
+        assert_eq!(loaded.placements["a.png"].w, 30);
+    }
+
+    #[test]
+    fn missing_state_defaults_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = load_state(&dir.path().join("nope.toml")).unwrap();
+        assert!(loaded.placements.is_empty());
+    }
 }
