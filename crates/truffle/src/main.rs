@@ -1,6 +1,7 @@
 mod assets;
 mod commands;
 mod image;
+mod prompt;
 
 use clap::{builder::styling, Parser, Subcommand};
 

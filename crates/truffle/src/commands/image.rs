@@ -1,3 +1,4 @@
+pub use crate::commands::generate::{run as generate_run, GenerateArgs};
 pub use crate::commands::highlight::{run as highlight_run, HighlightArgs};
 pub use crate::commands::palette::{run as palette_run, PaletteArgs};
 pub use crate::commands::project::{run as project_run, ProjectArgs};
@@ -8,6 +9,8 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum ImageCommands {
+    /// Generate images from a prompt Markdown file via Replicate, then snap them
+    Generate(GenerateArgs),
     /// Generate highlight variants of PNG images with white outlines
     Highlight(HighlightArgs),
     /// Apply a color palette to PNG images
@@ -22,6 +25,7 @@ pub enum ImageCommands {
 
 pub fn run(command: ImageCommands) -> bool {
     match command {
+        ImageCommands::Generate(args) => generate_run(args),
         ImageCommands::Highlight(args) => highlight_run(args),
         ImageCommands::Palette(args) => palette_run(args),
         ImageCommands::Project(args) => project_run(args),

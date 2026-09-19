@@ -28,6 +28,13 @@ pub struct TruffleConfig {
     #[serde(default)]
     pub api_key: Option<String>,
 
+    /// Replicate API token for `truffle image generate`.
+    ///
+    /// Precedence: `--replicate-token` flag, then the `REPLICATE_API_TOKEN`
+    /// environment variable (`.env` is loaded automatically), then this field.
+    #[serde(default)]
+    pub replicate_token: Option<String>,
+
     /// Existing Luau asset catalog to read (also the merge base for `--sync-only`).
     #[serde(default = "default_assets_input")]
     pub assets_input: PathBuf,
@@ -227,6 +234,7 @@ output_path = "src/shared/data/assets"
     fn minimal_config_uses_builtin_defaults() {
         let config: TruffleConfig = parse(MINIMAL).unwrap();
         assert_eq!(config.api_key, None);
+        assert_eq!(config.replicate_token, None);
         assert_eq!(
             config.assets_input,
             PathBuf::from("src/shared/data/assets/assets.luau")
@@ -256,6 +264,7 @@ output_path = "src/shared/data/assets"
         let config: TruffleConfig = parse(
             r#"
 api_key = "key-from-config"
+replicate_token = "replicate-from-config"
 assets_input = "in.luau"
 assets_output = "out.luau"
 dts_output = "out.d.ts"
@@ -287,6 +296,10 @@ no_antialias = true
         )
         .unwrap();
         assert_eq!(config.api_key.as_deref(), Some("key-from-config"));
+        assert_eq!(
+            config.replicate_token.as_deref(),
+            Some("replicate-from-config")
+        );
         assert_eq!(config.assets_input, PathBuf::from("in.luau"));
         assert_eq!(config.images_folder, PathBuf::from("images"));
         assert!(config.auto_highlight);

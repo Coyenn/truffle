@@ -1,3 +1,4 @@
+pub mod generate;
 pub mod highlight;
 pub mod palette;
 pub mod project;

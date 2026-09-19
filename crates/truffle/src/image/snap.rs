@@ -13,6 +13,27 @@ use std::path::Path;
 
 pub const MAX_PALETTE_COLORS: usize = 256;
 
+/// Resolve an optional hex palette plus an optional palette PNG into colors.
+pub fn resolve_palette_option(
+    hex: Option<&str>,
+    palette_png: Option<&Path>,
+) -> Result<Option<Vec<[u8; 3]>>> {
+    if let Some(hex) = hex {
+        return parse_palette_hex(hex).map(Some);
+    }
+    if let Some(palette_path) = palette_png {
+        let colors = super::palette::load_palette_colors(palette_path)
+            .with_context(|| format!("Failed to load palette {}", palette_path.display()))?;
+        ensure!(
+            colors.len() <= MAX_PALETTE_COLORS,
+            "Palette PNG must contain at most {MAX_PALETTE_COLORS} distinct colors (found {})",
+            colors.len()
+        );
+        return Ok(Some(colors));
+    }
+    Ok(None)
+}
+
 /// Parse comma-separated 6-digit hex colors (`"0d2b45,ffecd6"`).
 /// A leading `#` per entry is allowed; duplicates are removed.
 pub fn parse_palette_hex(value: &str) -> Result<Vec<[u8; 3]>> {

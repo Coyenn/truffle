@@ -25,3 +25,5 @@ fontdue = "0.9"
 ttf-parser = "0.21"
 dotenvy = "0.15"
 spritefusion-pixel-snapper = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+serde_yaml = "0.9"

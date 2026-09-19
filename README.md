@@ -49,6 +49,9 @@ truffle image highlight assets/images --thickness 2
 # Snap messy or off-grid pixels back to a crisp pixel-art grid
 truffle image snap assets/images --recursive
 
+# Generate images from a prompt file via Replicate, then snap them
+truffle image generate prompts/slime.md --dry-run
+
 # Generate a grass integration overlay for one sprite
 truffle image terrain assets/images/house.png
 ```
@@ -107,6 +110,9 @@ line_height = 95
 - `api_key` (default: unset): Open Cloud API key fallback. Precedence is
   `--api-key` flag, then `TRUFFLE_API_KEY` (`.env` is loaded automatically),
   then this field.
+- `replicate_token` (default: unset): Replicate API token fallback for
+  `truffle image generate`. Precedence is `--replicate-token` flag, then
+  `REPLICATE_API_TOKEN` (`.env` is loaded automatically), then this field.
 - `assets_input` / `assets_output` / `dts_output` / `images_folder`: sync
   input/output paths (defaults shown above). Each has a matching CLI flag
   that overrides it for one invocation.
@@ -129,15 +135,20 @@ line_height = 95
 When `atlas = true`, sprites are packed with a **MaxRects** layout (Best
 Short-Side Fit) for high density. Packing is also **incremental**: previously
 placed sprites keep their page and rect, and only new/changed sprites are
-packed into leftover free space or fresh pages. Because Roblox uploads are
-content-addressed, this means adding one sprite only reuploads the atlas page
+packed into leftover free space or fresh pages. Because Truffle caches uploaded
+content by hash, adding one sprite only reuploads the atlas page
 it actually lands on instead of regenerating every atlas.
 
 Packing state is persisted to `.truffle/truffle-atlases.toml` (inside the
 scratch directory). It is intended to be tracked in version control — add a
 `.truffle/*` + `!.truffle/truffle-atlases.toml` gitignore exception — so
-results are stable across machines and CI. Delete it to force a fresh full
-repack.
+results are stable across machines and CI. New or resized images are placed
+without overlapping existing sprites. Invalid persisted placements are repaired
+automatically. Deleting this file forces a full repack and can change many atlas
+pages; it is not a normal step when replacing an image.
+
+See [the asset sync workflow](docs/asset-sync.md) for repeated art edits,
+selective uploads, dry runs, and recovery.
 
 ## Commands
 
@@ -152,6 +163,9 @@ Syncs assets to Roblox using the bundled Asphalt, then augments the Luau asset m
 | `--dts-output <PATH>` | Path for generated TypeScript definitions | truffle.toml `dts_output` |
 | `--images-folder <PATH>` | Root folder that contains PNG sources | truffle.toml `images_folder` |
 | `--api-key <KEY>` | API key override (otherwise `TRUFFLE_API_KEY` / truffle.toml `api_key`) | `TRUFFLE_API_KEY` env |
+| `--dry-run` | Preview the sync without uploading or changing generated files or packing state | `false` |
+| `--sync-only <GLOB>` | Select direct-image inputs; atlas mode explicitly checks the complete shared layout | unset |
+| `--skip-atlas` | Upload source files directly, including when atlas mode is configured | `false` |
 
 Requirements:
 
@@ -200,6 +214,38 @@ Identical reruns leave output bytes and modification times untouched. `--dry-run
 validates both inputs without writing. See the [format and authoring guide](docs/image-project.md)
 and [JSON Schema](schemas/projection.schema.json) for maps that can address shirts,
 pants, shoes, animations, or arbitrary pixel art.
+
+### `truffle image generate`
+
+Generates images from a prompt Markdown file via the Replicate API, then
+chains each download through the Pixel Snapper. The prompt file's YAML front
+matter pins the model plus all generation parameters; the Markdown body is the
+image prompt. Keeps raw downloads next to their `-snapped.png` siblings for
+review before Aseprite cleanup.
+
+| Argument / Option | Description |
+| --- | --- |
+| `<PROMPT_FILE>` | Prompt Markdown file with YAML front matter. |
+| `-o`, `--output <PATH>` | Output PNG file (single output) or output directory (multiple outputs). Defaults to the file's `output`, else `<stem>-generated.png` beside the prompt. |
+| `--dry-run` | Print the resolved model, input JSON, and planned paths without calling Replicate. |
+| `--force` | Overwrite existing raw and snapped outputs. |
+| `--no-snap` | Skip the Pixel Snapper chaining step. |
+| `--replicate-token <TOKEN>` | API token override (otherwise `REPLICATE_API_TOKEN` / truffle.toml `replicate_token`). |
+
+Example flows:
+
+```bash
+# Preview what a prompt would do
+truffle image generate prompts/slime.md --dry-run
+
+# Generate two candidates, review the -snapped.png siblings
+truffle image generate prompts/slime.md --output assets/generated/slime.png
+```
+
+See the [format and authoring guide](docs/image-generate.md) for the front
+matter contract. Authentication follows the same precedence as sync:
+`--replicate-token`, then `REPLICATE_API_TOKEN` (`.env` is loaded
+automatically), then truffle.toml `replicate_token`.
 
 ### `truffle image snap`
 
@@ -286,3 +332,8 @@ The following permissions are required:
 - `asset:write`
 
 Make sure that your API key is under the Creator (user or group) that you've defined in `truffle.toml`.
+
+For `truffle image generate`, set `REPLICATE_API_TOKEN` instead (`.env` files
+are loaded automatically), pass `--replicate-token`, or set `replicate_token`
+in `truffle.toml`. You can get a token from
+[replicate.com/account/api-tokens](https://replicate.com/account/api-tokens).

@@ -29,11 +29,11 @@ pub struct Placed {
     pub rect: Rect,
 }
 
-/// Free space on an existing page, in allocation coordinates (padding included).
-#[derive(Debug, Clone, Copy)]
-pub struct SeedRect {
+/// An existing page and its remaining allocation space, including fully occupied pages.
+#[derive(Debug, Clone)]
+pub struct SeedPage {
     pub page: u32,
-    pub rect: Rect,
+    pub free: Vec<Rect>,
 }
 
 /// Pack `sizes` (inner dimensions) into square pages of `page_size`, leaving a
@@ -46,7 +46,7 @@ pub fn pack(
     sizes: &[(u32, u32)],
     padding: u32,
     page_size: u32,
-    seed: &[SeedRect],
+    seed: &[SeedPage],
 ) -> anyhow::Result<Vec<Placed>> {
     if page_size == 0 {
         bail!("atlas size must be > 0");
@@ -68,9 +68,12 @@ pub fn pack(
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    let mut free: Vec<(u32, Rect)> = seed.iter().map(|s| (s.page, s.rect)).collect();
+    let mut free: Vec<(u32, Rect)> = seed
+        .iter()
+        .flat_map(|page| page.free.iter().map(move |rect| (page.page, *rect)))
+        .collect();
 
-    let mut next_page = free.iter().map(|(p, _)| *p).max().map_or(0, |m| m + 1);
+    let mut next_page = seed.iter().map(|page| page.page).max().map_or(0, |m| m + 1);
 
     let mut out = vec![
         Placed {
@@ -168,8 +171,20 @@ pub fn free_space(page_size: u32, fixed: &[Rect]) -> Vec<Rect> {
     for placed in fixed {
         let mut next = Vec::with_capacity(free.len() + 3);
         for region in &free {
-            if region.contains(placed) {
-                next.extend(subtract(region, placed));
+            let left = region.x.max(placed.x);
+            let top = region.y.max(placed.y);
+            let right = (region.x + region.w).min(placed.x + placed.w);
+            let bottom = (region.y + region.h).min(placed.y + placed.h);
+            if left < right && top < bottom {
+                next.extend(subtract(
+                    region,
+                    &Rect {
+                        x: left,
+                        y: top,
+                        w: right - left,
+                        h: bottom - top,
+                    },
+                ));
             } else {
                 next.push(*region);
             }
@@ -337,14 +352,14 @@ mod tests {
     fn fills_seed_space_before_opening_new_pages() {
         // Page 0 has a 8x8 gutter of free space at the top-left (after a fixed
         // sprite), and page 1 exists. The 4x4 item should land in page 0.
-        let seed = [SeedRect {
+        let seed = [SeedPage {
             page: 0,
-            rect: Rect {
+            free: vec![Rect {
                 x: 8,
                 y: 0,
                 w: 8,
                 h: 8,
-            },
+            }],
         }];
         let placed = pack(&[(4, 4)], 0, 16, &seed).unwrap();
         assert_eq!(placed[0].page, 0);
@@ -361,14 +376,14 @@ mod tests {
 
     #[test]
     fn opens_new_page_after_max_seed_page() {
-        let seed = [SeedRect {
+        let seed = [SeedPage {
             page: 3,
-            rect: Rect {
+            free: vec![Rect {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
-            },
+            }],
         }];
         let placed = pack(&[(8, 8)], 0, 8, &seed).unwrap();
         assert_eq!(placed[0].page, 4);
@@ -406,5 +421,33 @@ mod tests {
             w: 4,
             h: 4
         })));
+    }
+
+    #[test]
+    fn free_space_subtracts_rectangles_crossing_partition_boundaries() {
+        let fixed = [
+            Rect {
+                x: 8,
+                y: 0,
+                w: 8,
+                h: 8,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 16,
+            },
+        ];
+        let free = free_space(16, &fixed);
+        assert_eq!(
+            free,
+            vec![Rect {
+                x: 8,
+                y: 8,
+                w: 8,
+                h: 8
+            }]
+        );
     }
 }

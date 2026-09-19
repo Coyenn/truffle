@@ -1,5 +1,5 @@
 use super::model::{AssetMeta, AssetValue};
-use super::pack::{self, Rect as PackRect, SeedRect};
+use super::pack::{self, Rect as PackRect, SeedPage};
 use anyhow::{Context, Result};
 use asphalt::glob::Glob;
 use image::{GenericImageView, ImageBuffer, Rgba};
@@ -275,7 +275,24 @@ fn plan_atlas(
                     w: sprite.w.saturating_add(gutter),
                     h: sprite.h.saturating_add(gutter),
                 };
-                fixed_by_page.entry(prev.page).or_default().push(alloc);
+                // Older packing state may contain overlaps. Repack invalid slots
+                // instead of pinning the corruption into every subsequent atlas.
+                let occupied = fixed_by_page.entry(prev.page).or_default();
+                if prev.x < padding
+                    || prev.y < padding
+                    || alloc.x + alloc.w > atlas_size
+                    || alloc.y + alloc.h > atlas_size
+                    || occupied.iter().any(|other| {
+                        alloc.x < other.x + other.w
+                            && other.x < alloc.x + alloc.w
+                            && alloc.y < other.y + other.h
+                            && other.y < alloc.y + alloc.h
+                    })
+                {
+                    to_pack.push(sprite);
+                    continue;
+                }
+                occupied.push(alloc);
                 fixed_placed.push(PlacedSprite {
                     key: sprite.key.clone(),
                     src_path: sprite.src_path.clone(),
@@ -293,13 +310,12 @@ fn plan_atlas(
     }
 
     // Reconstruct free space on each page that has fixed sprites.
-    let mut seed: Vec<SeedRect> = Vec::new();
+    let mut seed: Vec<SeedPage> = Vec::new();
     for (page, allocs) in &fixed_by_page {
-        seed.extend(
-            pack::free_space(atlas_size, allocs)
-                .into_iter()
-                .map(|rect| SeedRect { page: *page, rect }),
-        );
+        seed.push(SeedPage {
+            page: *page,
+            free: pack::free_space(atlas_size, allocs),
+        });
     }
 
     let sizes: Vec<(u32, u32)> = to_pack.iter().map(|s| (s.w, s.h)).collect();
@@ -648,5 +664,109 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let loaded = load_state(&dir.path().join("nope.toml")).unwrap();
         assert!(loaded.placements.is_empty());
+    }
+
+    #[test]
+    fn repairs_overlapping_persisted_placements() {
+        let previous = BTreeMap::from([
+            (
+                "grow-all.png".into(),
+                StoredPlacement {
+                    page: 6,
+                    x: 4,
+                    y: 712,
+                    w: 128,
+                    h: 118,
+                },
+            ),
+            (
+                "heliobloom-highlight.png".into(),
+                StoredPlacement {
+                    page: 6,
+                    x: 4,
+                    y: 712,
+                    w: 535,
+                    h: 163,
+                },
+            ),
+        ]);
+        let sprites = [
+            pending("grow-all.png", 128, 118),
+            pending("heliobloom-highlight.png", 535, 163),
+        ];
+        let placed = plan_atlas(&sprites, &previous, 4, 1024).unwrap();
+        assert!(
+            placed[0].atlas_index != placed[1].atlas_index
+                || !overlaps(&placed[0].rect, &placed[1].rect)
+        );
+    }
+
+    #[test]
+    fn added_sprite_does_not_reuse_a_completely_full_page() {
+        let previous = BTreeMap::from([(
+            "full.png".into(),
+            StoredPlacement {
+                page: 0,
+                x: 4,
+                y: 4,
+                w: 248,
+                h: 248,
+            },
+        )]);
+        let sprites = [pending("full.png", 248, 248), pending("new.png", 16, 16)];
+        let placed = plan_atlas(&sprites, &previous, 4, 256).unwrap();
+        assert_eq!(placed[0].atlas_index, 0);
+        assert_eq!(placed[1].atlas_index, 1);
+    }
+
+    #[test]
+    fn incremental_atlas_preserves_pixels_after_resize_and_addition() {
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        let output = dir.path().join("atlases");
+        let state = dir.path().join("state.toml");
+        std::fs::create_dir(&images).unwrap();
+        let options = AtlasOptions {
+            size: 256,
+            padding: 4,
+            ..Default::default()
+        };
+        let red = ImageBuffer::from_pixel(100, 100, Rgba([255u8, 0, 0, 255]));
+        let blue = ImageBuffer::from_pixel(100, 130, Rgba([0u8, 0, 255, 255]));
+        red.save(images.join("red.png")).unwrap();
+        blue.save(images.join("blue.png")).unwrap();
+        build_atlases(&images, &output, &state, options.clone()).unwrap();
+
+        let red = ImageBuffer::from_pixel(128, 118, Rgba([255u8, 0, 0, 255]));
+        let green = ImageBuffer::from_pixel(70, 90, Rgba([0u8, 255, 0, 26]));
+        red.save(images.join("red.png")).unwrap();
+        green.save(images.join("green.png")).unwrap();
+        for _ in 0..2 {
+            let placements = build_atlases(&images, &output, &state, options.clone()).unwrap();
+            for (key, expected) in [
+                ("red.png", &red),
+                ("blue.png", &blue),
+                ("green.png", &green),
+            ] {
+                let placement = &placements[key];
+                let atlas = image::open(output.join(&placement.atlas_file_name))
+                    .unwrap()
+                    .to_rgba8();
+                let rect = placement.rect;
+                let actual =
+                    image::imageops::crop_imm(&atlas, rect.x, rect.y, rect.w, rect.h).to_image();
+                assert_eq!(&actual, expected, "packed pixels for {key}");
+            }
+            let ids = placements
+                .values()
+                .map(|p| (p.atlas_file_name.clone(), "rbxassetid://123".into()))
+                .collect();
+            let metadata = build_atlased_assets(&placements, &ids).unwrap();
+            let AssetValue::Object(red_meta) = &metadata["red.png"] else {
+                panic!("missing red metadata")
+            };
+            assert_eq!((red_meta.width, red_meta.height), (Some(128), Some(118)));
+            assert_eq!((red_meta.rect_w, red_meta.rect_h), (Some(128), Some(118)));
+        }
     }
 }
