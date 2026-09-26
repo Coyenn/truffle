@@ -58,6 +58,8 @@ export interface LayoutGlyph {
 	offsetX: number;
 	offsetY: number;
 	attrs: Record<string, unknown>;
+	/** Zero-based index of the line the glyph was placed on. */
+	line: number;
 }
 
 export interface LayoutResult {
