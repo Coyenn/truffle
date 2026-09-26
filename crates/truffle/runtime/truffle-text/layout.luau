@@ -556,9 +556,6 @@ function Layout.layoutRichText(
 			end
 		elseif character == " " then
 			flushWord()
-			if currentLineWidth > 0 then
-				currentLineWidth += spaceWidth
-			end
 		else
 			local idx = font:charIndex(character) or 0
 			table.insert(currentWord, {
