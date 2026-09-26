@@ -35,6 +35,8 @@ export type LayoutGlyph = {
 	offsetX: number,
 	offsetY: number,
 	attrs: { [string]: any },
+	-- Zero-based index of the line the glyph was placed on.
+	line: number,
 }
 
 export type LayoutResult = {
@@ -291,6 +293,7 @@ local function finalizeLayout(
 						offsetX = charData.offsetX,
 						offsetY = charData.offsetY,
 						attrs = charData.attrs,
+						line = lineIndex - 1,
 					})
 				end
 				currentX += charData.advance + letterSpacing
@@ -556,9 +559,6 @@ function Layout.layoutRichText(
 			end
 		elseif character == " " then
 			flushWord()
-			if currentLineWidth > 0 then
-				currentLineWidth += spaceWidth
-			end
 		else
 			local idx = font:charIndex(character) or 0
 			table.insert(currentWord, {
