@@ -380,12 +380,21 @@ fn write_atlas_images(
         let mut atlas: ImageBuffer<Rgba<u8>, Vec<u8>> =
             ImageBuffer::from_pixel(atlas_size, atlas_size, Rgba([0, 0, 0, 0]));
 
+        let mut sources = Vec::with_capacity(sprites.len());
         for s in sprites {
             let img = image::open(&s.src_path)
                 .with_context(|| format!("failed to decode png: {}", s.src_path.display()))?
                 .to_rgba8();
             blit_with_extrude(&mut atlas, &img, s.rect.x, s.rect.y, padding);
+            sources.push(img);
         }
+
+        verify_atlas_page(&atlas, sprites, &sources).with_context(|| {
+            format!(
+                "refusing to write {}: placements do not match their source images",
+                atlas_file_name(atlas_index)
+            )
+        })?;
 
         let path = output_dir.join(atlas_file_name(atlas_index));
         image::DynamicImage::ImageRgba8(atlas)
@@ -394,6 +403,60 @@ fn write_atlas_images(
     }
 
     Ok(())
+}
+
+/// Reads every placement back out of the composed page, so a sync can never
+/// upload a page whose metadata points at overwritten or clipped pixels.
+fn verify_atlas_page(
+    atlas: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    sprites: &[&PlacedSprite],
+    sources: &[ImageBuffer<Rgba<u8>, Vec<u8>>],
+) -> Result<()> {
+    let mut mismatches = Vec::new();
+    for (sprite, source) in sprites.iter().zip(sources) {
+        let rect = sprite.rect;
+        let inside = rect.x + rect.w <= atlas.width() && rect.y + rect.h <= atlas.height();
+        if inside
+            && image::imageops::crop_imm(atlas, rect.x, rect.y, rect.w, rect.h).to_image()
+                == *source
+        {
+            continue;
+        }
+
+        let overlapping: Vec<&str> = sprites
+            .iter()
+            .filter(|other| other.key != sprite.key && rects_overlap(&other.rect, &rect))
+            .map(|other| other.key.as_str())
+            .collect();
+        let cause = if !inside {
+            "extends past the page edge".to_string()
+        } else if source.dimensions() != (rect.w, rect.h) {
+            format!(
+                "source is {}x{} but its slot is {}x{}",
+                source.width(),
+                source.height(),
+                rect.w,
+                rect.h
+            )
+        } else if overlapping.is_empty() {
+            "pixels differ from the source".to_string()
+        } else {
+            format!("overwritten by {}", overlapping.join(", "))
+        };
+        mismatches.push(format!(
+            "{} at {},{} {}x{}: {cause}",
+            sprite.key, rect.x, rect.y, rect.w, rect.h
+        ));
+    }
+
+    if !mismatches.is_empty() {
+        anyhow::bail!("{}", mismatches.join("\n"));
+    }
+    Ok(())
+}
+
+fn rects_overlap(a: &AtlasRect, b: &AtlasRect) -> bool {
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
 
 fn blit_with_extrude(
@@ -484,14 +547,6 @@ mod tests {
         }
     }
 
-    fn overlaps(a: &AtlasRect, b: &AtlasRect) -> bool {
-        let a_r = a.x + a.w;
-        let a_b = a.y + a.h;
-        let b_r = b.x + b.w;
-        let b_b = b.y + b.h;
-        a.x < b_r && b.x < a_r && a.y < b_b && b.y < a_b
-    }
-
     #[test]
     fn added_sprite_does_not_move_existing_sprites() {
         let padding = 4u32;
@@ -552,8 +607,8 @@ mod tests {
         // The new sprite landed on the same page without disturbing a or b.
         let c = by_key["c.png"];
         assert_eq!(c.atlas_index, 0);
-        assert!(!overlaps(&c.rect, &a.rect));
-        assert!(!overlaps(&c.rect, &b.rect));
+        assert!(!rects_overlap(&c.rect, &a.rect));
+        assert!(!rects_overlap(&c.rect, &b.rect));
     }
 
     #[test]
@@ -598,7 +653,7 @@ mod tests {
         );
         assert_eq!(by_key["a.png"].atlas_index, 0);
         // c may reuse the freed slot, but must not overlap a.
-        assert!(!overlaps(&by_key["c.png"].rect, &by_key["a.png"].rect));
+        assert!(!rects_overlap(&by_key["c.png"].rect, &by_key["a.png"].rect));
     }
 
     #[test]
@@ -697,7 +752,7 @@ mod tests {
         let placed = plan_atlas(&sprites, &previous, 4, 1024).unwrap();
         assert!(
             placed[0].atlas_index != placed[1].atlas_index
-                || !overlaps(&placed[0].rect, &placed[1].rect)
+                || !rects_overlap(&placed[0].rect, &placed[1].rect)
         );
     }
 
@@ -768,5 +823,65 @@ mod tests {
             assert_eq!((red_meta.width, red_meta.height), (Some(128), Some(118)));
             assert_eq!((red_meta.rect_w, red_meta.rect_h), (Some(128), Some(118)));
         }
+    }
+
+    fn placed(
+        dir: &Path,
+        key: &str,
+        image: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+        x: u32,
+        y: u32,
+    ) -> PlacedSprite {
+        let src_path = dir.join(key);
+        image.save(&src_path).unwrap();
+        PlacedSprite {
+            key: key.to_string(),
+            src_path,
+            atlas_index: 0,
+            rect: AtlasRect {
+                x,
+                y,
+                w: image.width(),
+                h: image.height(),
+            },
+        }
+    }
+
+    #[test]
+    fn refuses_to_write_a_page_where_a_sprite_was_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("atlases");
+        std::fs::create_dir(&output).unwrap();
+        let canopy = ImageBuffer::from_pixel(40, 40, Rgba([0u8, 128, 128, 255]));
+        let clear = ImageBuffer::from_pixel(20, 20, Rgba([0u8, 0, 0, 0]));
+        let sprites = [
+            placed(dir.path(), "willow.png", &canopy, 4, 4),
+            placed(dir.path(), "shadow.png", &clear, 14, 14),
+        ];
+
+        let error = write_atlas_images(&sprites, &output, 4, 256).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("willow.png at 4,4 40x40: overwritten by shadow.png"),
+            "{message}"
+        );
+        assert!(!message.contains("shadow.png at"), "{message}");
+        assert!(!output.join("atlas_000.png").exists());
+    }
+
+    #[test]
+    fn refuses_to_write_a_sprite_past_the_page_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("atlases");
+        std::fs::create_dir(&output).unwrap();
+        let sprite = ImageBuffer::from_pixel(20, 20, Rgba([255u8, 0, 0, 255]));
+        let sprites = [placed(dir.path(), "edge.png", &sprite, 246, 4)];
+
+        let error = write_atlas_images(&sprites, &output, 4, 256).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("edge.png at 246,4 20x20: extends past the page edge"),
+            "{message}"
+        );
     }
 }
