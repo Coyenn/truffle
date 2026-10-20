@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use truffle_config::FontPreset;
 
-use self::kerning::build_kerning_classes;
+use self::kerning::{build_kerning_classes, KerningClasses};
 use self::meta_v2::{float_luau, AtlasPageMeta};
 use self::meta_v2::{render_font_meta_dts, serialize_font_meta_luau, FontMetaV2, GlyphLayerMeta};
 use self::pack::{pack_glyphs, validate_atlas_size, write_atlas_pages, PackRect};
@@ -91,6 +91,16 @@ pub struct FontArgs {
     /// Disable anti-aliasing by converting rasterized glyph alpha to hard 0/255.
     #[arg(long, default_value_t = false)]
     pub no_antialias: bool,
+
+    /// Distance in pixels from the line top to the baseline (defaults to truffle.toml [font] `baseline`,
+    /// else the legacy Marzipan cell placement)
+    #[arg(long)]
+    pub baseline: Option<u32>,
+
+    /// Bake on the font's native pixel grid: round advances to whole pixels and skip ink-gap kerning
+    /// (defaults to truffle.toml [font] `pixel_grid`)
+    #[arg(long, default_value_t = false)]
+    pub pixel_grid: bool,
 }
 
 pub fn run(args: FontArgs) -> bool {
@@ -128,6 +138,8 @@ struct ResolvedFontArgs {
     outline: u32,
     outline_png: Option<PathBuf>,
     no_antialias: bool,
+    baseline: Option<u32>,
+    pixel_grid: bool,
 }
 
 impl ResolvedFontArgs {
@@ -160,6 +172,8 @@ impl ResolvedFontArgs {
             outline: args.outline.or(preset.outline).unwrap_or(0),
             outline_png: args.outline_png.or_else(|| preset.outline_png.clone()),
             no_antialias: args.no_antialias || preset.no_antialias.unwrap_or(false),
+            baseline: args.baseline.or(preset.baseline),
+            pixel_grid: args.pixel_grid || preset.pixel_grid.unwrap_or(false),
         }
     }
 }
@@ -184,6 +198,14 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
     let atlas_size = validate_atlas_size(args.max_atlas_size)?;
     if args.line_height == 0 {
         anyhow::bail!("--line-height must be > 0");
+    }
+    if let Some(baseline) = args.baseline {
+        if baseline > args.line_height {
+            anyhow::bail!(
+                "--baseline must be <= --line-height (got baseline {baseline}, line height {})",
+                args.line_height
+            );
+        }
     }
     if args.outline > 0 && args.padding < args.outline {
         anyhow::bail!(
@@ -287,12 +309,20 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
     for (g, pack) in rasterized.into_iter().zip(packed.iter().cloned()) {
         let offset_x = 0f32;
         // Legacy marzipan top bearing is layout_baseline + fontdue ymin (positive for marks above baseline).
-        let offset_y = glyph_offset_y(
-            args.line_height as f32,
-            g.h as f32,
-            layout_baseline,
-            g.metrics.ymin as f32,
-        );
+        let offset_y = match args.baseline {
+            Some(baseline) => baseline_offset_y(baseline as f32, g.h as f32, g.metrics.ymin as f32),
+            None => glyph_offset_y(
+                args.line_height as f32,
+                g.h as f32,
+                layout_baseline,
+                g.metrics.ymin as f32,
+            ),
+        };
+        let advance = if args.pixel_grid {
+            g.metrics.advance_width.round()
+        } else {
+            g.metrics.advance_width
+        };
 
         if g.w > 0 && g.h > 0 {
             // The packed rect reserves room for the outline; ink sits centered inside it.
@@ -323,7 +353,7 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
             pack,
             offset_x,
             offset_y,
-            advance: g.metrics.advance_width,
+            advance,
         });
     }
 
@@ -344,12 +374,16 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
     }
 
     let advances: Vec<f32> = placed.iter().map(|g| g.advance).collect();
-    let kerning = build_kerning_classes(
-        &placed.iter().map(|g| g.ch).collect::<Vec<_>>(),
-        &ink_profiles,
-        &advances,
-        args.kerning_gap,
-    );
+    let kerning = if args.pixel_grid {
+        KerningClasses::none(placed.len())
+    } else {
+        build_kerning_classes(
+            &placed.iter().map(|g| g.ch).collect::<Vec<_>>(),
+            &ink_profiles,
+            &advances,
+            args.kerning_gap,
+        )
+    };
 
     let glyphs = build_glyph_layer(&placed, outline_radius);
     let outline_layer = if outline_enabled {
@@ -502,6 +536,10 @@ fn glyph_offset_y(line_height: f32, glyph_height: f32, layout_baseline: f32, ymi
     line_height - glyph_height - 2.0 * layout_baseline - ymin
 }
 
+fn baseline_offset_y(baseline: f32, glyph_height: f32, ymin: f32) -> f32 {
+    baseline - glyph_height - ymin
+}
+
 fn derive_outline_png_path(base_png: &Path) -> PathBuf {
     let parent = match base_png.parent() {
         Some(parent) => parent,
@@ -561,6 +599,14 @@ mod tests {
         let outline_layer = build_outline_layer(&placed, outline);
         assert_eq!(&outline_layer.rects[0..5], &[0, 10, 20, 40, 50]);
         assert_eq!(outline_layer.offset_y[0], 7.0);
+    }
+
+    #[test]
+    fn explicit_baseline_places_glyph_bottoms_on_it() {
+        // Pixolde at its native 16 px: caps are 8 px tall, descenders reach 2 px below.
+        assert_eq!(baseline_offset_y(10.0, 8.0, 0.0), 2.0);
+        assert_eq!(baseline_offset_y(10.0, 8.0, -2.0), 4.0);
+        assert_eq!(baseline_offset_y(10.0, 2.0, 6.0), 2.0);
     }
 
     #[test]

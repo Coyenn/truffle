@@ -91,6 +91,19 @@ fn pair_kern_px(
     Some(-(min_gap - target_gap))
 }
 
+impl KerningClasses {
+    /// One class per side with a zero matrix, so layout keeps the font's own advances.
+    pub fn none(glyph_count: usize) -> Self {
+        Self {
+            left_class: vec![0; glyph_count],
+            right_class: vec![0; glyph_count],
+            left_count: 1,
+            right_count: 1,
+            matrix: vec![0.0],
+        }
+    }
+}
+
 /// Build kerning classes from ink profiles and a target pixel gap between glyph ink.
 pub fn build_kerning_classes(
     chars: &[char],

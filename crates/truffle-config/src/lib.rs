@@ -127,6 +127,13 @@ pub struct FontPreset {
     pub outline_png: Option<PathBuf>,
     /// Disable anti-aliasing (hard 0/255 alpha).
     pub no_antialias: Option<bool>,
+    /// Distance in pixels from the line top to the baseline. Unset keeps the
+    /// legacy Marzipan cell placement derived from `line_height`, `padding`, and `px`.
+    pub baseline: Option<u32>,
+    /// Bake on the font's native pixel grid: advances round to whole pixels and
+    /// ink-gap kerning is skipped, because pixel fonts carry their spacing in
+    /// their advances. Use with `px` set to the font's pixels per em.
+    pub pixel_grid: Option<bool>,
 }
 
 fn default_assets_input() -> PathBuf {
@@ -292,6 +299,8 @@ padding = 5
 px = 121.0
 line_height = 95
 no_antialias = true
+baseline = 10
+pixel_grid = true
 "#,
         )
         .unwrap();
@@ -312,6 +321,8 @@ no_antialias = true
         assert_eq!(config.font.px, Some(121.0));
         assert_eq!(config.font.line_height, Some(95));
         assert_eq!(config.font.no_antialias, Some(true));
+        assert_eq!(config.font.baseline, Some(10));
+        assert_eq!(config.font.pixel_grid, Some(true));
         assert_eq!(config.font.charset, None);
     }
 
