@@ -39,6 +39,29 @@ pub fn ink_profile_from_alpha(
     InkProfile { ymin, xmin, rows }
 }
 
+/// Spreads every pixel `amount` pixels to the right and down, so the bitmap
+/// grows by `amount` in both dimensions and strokes get heavier.
+pub fn embolden_alpha(alpha: &[u8], w: u32, h: u32, amount: u32) -> (u32, u32, Vec<u8>) {
+    let out_w = w + amount;
+    let out_h = h + amount;
+    let mut out = vec![0u8; (out_w * out_h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let a = alpha[(y * w + x) as usize];
+            if a == 0 {
+                continue;
+            }
+            for dy in 0..=amount {
+                for dx in 0..=amount {
+                    let i = ((y + dy) * out_w + x + dx) as usize;
+                    out[i] = out[i].max(a);
+                }
+            }
+        }
+    }
+    (out_w, out_h, out)
+}
+
 pub fn binarize_alpha(alpha: &mut [u8]) {
     for a in alpha.iter_mut() {
         *a = if *a == 0 { 0 } else { 255 };
@@ -139,6 +162,13 @@ pub fn dilate_alpha_with_border(alpha: &[u8], w: u32, h: u32, r: u32) -> (u32, u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embolden_alpha_spreads_right_and_down() {
+        let (w, h, out) = embolden_alpha(&[255, 0, 0, 0], 2, 2, 1);
+        assert_eq!((w, h), (3, 3));
+        assert_eq!(out, vec![255, 255, 0, 255, 255, 0, 0, 0, 0]);
+    }
 
     #[test]
     fn binarize_alpha_makes_hard_edges() {

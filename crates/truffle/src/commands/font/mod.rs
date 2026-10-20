@@ -16,7 +16,7 @@ use self::meta_v2::{float_luau, AtlasPageMeta};
 use self::meta_v2::{render_font_meta_dts, serialize_font_meta_luau, FontMetaV2, GlyphLayerMeta};
 use self::pack::{pack_glyphs, validate_atlas_size, write_atlas_pages, PackRect};
 use self::raster::{
-    binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border,
+    binarize_alpha, blit_alpha_color, blit_alpha_white, dilate_alpha_with_border, embolden_alpha,
     ink_profile_from_alpha, InkProfile,
 };
 
@@ -101,6 +101,15 @@ pub struct FontArgs {
     /// (defaults to truffle.toml [font] `pixel_grid`)
     #[arg(long, default_value_t = false)]
     pub pixel_grid: bool,
+
+    /// Thicken glyphs by this many pixels to the right and down, before the outline
+    /// (defaults to truffle.toml [font] `embolden`)
+    #[arg(long)]
+    pub embolden: Option<u32>,
+
+    /// Pixels added between every pair of glyphs, negative tightens (defaults to truffle.toml [font] `tracking`)
+    #[arg(long, allow_negative_numbers = true)]
+    pub tracking: Option<f32>,
 }
 
 pub fn run(args: FontArgs) -> bool {
@@ -140,6 +149,8 @@ struct ResolvedFontArgs {
     no_antialias: bool,
     baseline: Option<u32>,
     pixel_grid: bool,
+    embolden: u32,
+    tracking: f32,
 }
 
 impl ResolvedFontArgs {
@@ -174,6 +185,8 @@ impl ResolvedFontArgs {
             no_antialias: args.no_antialias || preset.no_antialias.unwrap_or(false),
             baseline: args.baseline.or(preset.baseline),
             pixel_grid: args.pixel_grid || preset.pixel_grid.unwrap_or(false),
+            embolden: args.embolden.or(preset.embolden).unwrap_or(0),
+            tracking: args.tracking.or(preset.tracking).unwrap_or(0.0),
         }
     }
 }
@@ -248,10 +261,13 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
 
     for ch in charset.chars() {
         let (metrics, mut bitmap) = font.rasterize(ch, px);
-        let w = metrics.width as u32;
-        let h = metrics.height as u32;
+        let mut w = metrics.width as u32;
+        let mut h = metrics.height as u32;
         if args.no_antialias {
             binarize_alpha(&mut bitmap);
+        }
+        if args.embolden > 0 && w > 0 && h > 0 {
+            (w, h, bitmap) = embolden_alpha(&bitmap, w, h, args.embolden);
         }
         if w > 0 && h > 0 {
             min_ymin = min_ymin.min(metrics.ymin);
@@ -287,15 +303,16 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
 
     let packed = pack_glyphs(&sizes, args.padding, atlas_size)?;
     let page_count = packed.iter().map(|p| p.page).max().unwrap_or(0) + 1;
+    let page_heights = used_page_heights(&packed, page_count, args.padding, atlas_size);
 
-    let mut atlases: Vec<image::RgbaImage> = (0..page_count)
-        .map(|_| image::RgbaImage::from_pixel(atlas_size, atlas_size, image::Rgba([0, 0, 0, 0])))
+    let mut atlases: Vec<image::RgbaImage> = page_heights
+        .iter()
+        .map(|&h| image::RgbaImage::from_pixel(atlas_size, h, image::Rgba([0, 0, 0, 0])))
         .collect();
     let mut outline_atlases: Vec<image::RgbaImage> = if outline_enabled {
-        (0..page_count)
-            .map(|_| {
-                image::RgbaImage::from_pixel(atlas_size, atlas_size, image::Rgba([0, 0, 0, 0]))
-            })
+        page_heights
+            .iter()
+            .map(|&h| image::RgbaImage::from_pixel(atlas_size, h, image::Rgba([0, 0, 0, 0])))
             .collect()
     } else {
         Vec::new()
@@ -310,10 +327,14 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
         let offset_x = 0f32;
         // Legacy marzipan top bearing is layout_baseline + fontdue ymin (positive for marks above baseline).
         let offset_y = match args.baseline {
-            Some(baseline) => baseline_offset_y(baseline as f32, g.h as f32, g.metrics.ymin as f32),
+            Some(baseline) => baseline_offset_y(
+                baseline as f32,
+                g.metrics.height as f32,
+                g.metrics.ymin as f32,
+            ),
             None => glyph_offset_y(
                 args.line_height as f32,
-                g.h as f32,
+                g.metrics.height as f32,
                 layout_baseline,
                 g.metrics.ymin as f32,
             ),
@@ -375,7 +396,7 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
 
     let advances: Vec<f32> = placed.iter().map(|g| g.advance).collect();
     let kerning = if args.pixel_grid {
-        KerningClasses::none(placed.len())
+        KerningClasses::uniform(placed.len(), args.tracking)
     } else {
         build_kerning_classes(
             &placed.iter().map(|g| g.ch).collect::<Vec<_>>(),
@@ -383,6 +404,7 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
             &advances,
             args.kerning_gap,
         )
+        .track(args.tracking)
     };
 
     let glyphs = build_glyph_layer(&placed, outline_radius);
@@ -392,11 +414,9 @@ fn run_impl(args: ResolvedFontArgs) -> anyhow::Result<()> {
         None
     };
 
-    let pages: Vec<AtlasPageMeta> = (0..page_count)
-        .map(|_| AtlasPageMeta {
-            w: atlas_size,
-            h: atlas_size,
-        })
+    let pages: Vec<AtlasPageMeta> = page_heights
+        .iter()
+        .map(|&h| AtlasPageMeta { w: atlas_size, h })
         .collect();
 
     let meta = FontMetaV2 {
@@ -536,6 +556,26 @@ fn glyph_offset_y(line_height: f32, glyph_height: f32, layout_baseline: f32, ymi
     line_height - glyph_height - 2.0 * layout_baseline - ymin
 }
 
+/// Each page keeps the full width but shrinks to the power-of-two height its glyphs use.
+fn used_page_heights(
+    packed: &[PackRect],
+    page_count: u32,
+    padding: u32,
+    atlas_size: u32,
+) -> Vec<u32> {
+    (0..page_count)
+        .map(|page| {
+            let used = packed
+                .iter()
+                .filter(|rect| rect.page == page && rect.w > 0)
+                .map(|rect| rect.y + rect.h + padding)
+                .max()
+                .unwrap_or(1);
+            used.next_power_of_two().min(atlas_size)
+        })
+        .collect()
+}
+
 fn baseline_offset_y(baseline: f32, glyph_height: f32, ymin: f32) -> f32 {
     baseline - glyph_height - ymin
 }
@@ -607,6 +647,34 @@ mod tests {
         assert_eq!(baseline_offset_y(10.0, 8.0, 0.0), 2.0);
         assert_eq!(baseline_offset_y(10.0, 8.0, -2.0), 4.0);
         assert_eq!(baseline_offset_y(10.0, 2.0, 6.0), 2.0);
+    }
+
+    #[test]
+    fn pages_shrink_to_used_power_of_two_height() {
+        let packed = vec![
+            PackRect {
+                page: 0,
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            },
+            PackRect {
+                page: 0,
+                x: 0,
+                y: 290,
+                w: 10,
+                h: 20,
+            },
+            PackRect {
+                page: 1,
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 1000,
+            },
+        ];
+        assert_eq!(used_page_heights(&packed, 2, 1, 1024), vec![512, 1024]);
     }
 
     #[test]

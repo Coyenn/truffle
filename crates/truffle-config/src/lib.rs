@@ -134,6 +134,11 @@ pub struct FontPreset {
     /// ink-gap kerning is skipped, because pixel fonts carry their spacing in
     /// their advances. Use with `px` set to the font's pixels per em.
     pub pixel_grid: Option<bool>,
+    /// Thickens every glyph by this many pixels to the right and down, before
+    /// the outline. Restores stroke weight lost to a finer raster.
+    pub embolden: Option<u32>,
+    /// Pixels added between every pair of glyphs (negative tightens).
+    pub tracking: Option<f32>,
 }
 
 fn default_assets_input() -> PathBuf {
@@ -301,6 +306,8 @@ line_height = 95
 no_antialias = true
 baseline = 10
 pixel_grid = true
+embolden = 1
+tracking = -2.0
 "#,
         )
         .unwrap();
@@ -323,6 +330,8 @@ pixel_grid = true
         assert_eq!(config.font.no_antialias, Some(true));
         assert_eq!(config.font.baseline, Some(10));
         assert_eq!(config.font.pixel_grid, Some(true));
+        assert_eq!(config.font.embolden, Some(1));
+        assert_eq!(config.font.tracking, Some(-2.0));
         assert_eq!(config.font.charset, None);
     }
 

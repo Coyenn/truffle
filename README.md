@@ -127,13 +127,17 @@ line_height = 95
 - `[font]`: Optional `truffle font` preset (`padding`, `charset`,
   `charset_file`, `px`, `line_height`, `max_atlas_size`, `kerning_gap`,
   `luau`, `dts`, `runtime_out`, `outline`, `outline_png`, `no_antialias`,
-  `baseline`, `pixel_grid`).
+  `baseline`, `pixel_grid`, `embolden`, `tracking`).
   Every field is optional; CLI flags override the preset, which overrides
   the built-in defaults. Input/output paths stay per-invocation arguments.
   For pixel fonts, set `px` to the font's pixels per em and enable
   `pixel_grid` so each atlas texel is one font pixel, advances stay whole
   pixels, and the font's own spacing replaces ink-gap kerning. `baseline`
   then places every glyph's baseline that many pixels below the line top.
+  Set `px` to a whole multiple of the native size to bake a finer atlas for
+  smooth scaling; `embolden` then adds stroke weight in those finer pixels,
+  and `tracking` adds the same spacing between every pair of glyphs. Atlas
+  pages keep the full width and shrink to the power-of-two height they use.
 
 ### Atlas packing
 

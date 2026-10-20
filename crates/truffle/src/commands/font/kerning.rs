@@ -92,15 +92,23 @@ fn pair_kern_px(
 }
 
 impl KerningClasses {
-    /// One class per side with a zero matrix, so layout keeps the font's own advances.
-    pub fn none(glyph_count: usize) -> Self {
+    /// One class per side, so every pair gets the same `spacing` on top of the font's own advances.
+    pub fn uniform(glyph_count: usize, spacing: f32) -> Self {
         Self {
             left_class: vec![0; glyph_count],
             right_class: vec![0; glyph_count],
             left_count: 1,
             right_count: 1,
-            matrix: vec![0.0],
+            matrix: vec![spacing],
         }
+    }
+
+    /// Adds `spacing` to every pair.
+    pub fn track(mut self, spacing: f32) -> Self {
+        for value in self.matrix.iter_mut() {
+            *value += spacing;
+        }
+        self
     }
 }
 
